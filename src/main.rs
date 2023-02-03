@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use std::collections::HashMap;
+use core::time::Duration;
 
 fn main() {
     let options = eframe::NativeOptions {
@@ -64,8 +65,13 @@ impl eframe::App for ChahamiApp {
 }
 
 fn get_my_global_ip_address() -> Option<String> {
-    // Example from https://crates.io/crates/reqwest:
-    let mut resp = reqwest::blocking::get("https://httpbin.org/ip").ok()?
+    // https://docs.rs/reqwest/latest/reqwest/blocking/struct.ClientBuilder.html
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build().ok()?;
+    // https://docs.rs/reqwest/latest/reqwest/blocking/struct.Client.html
+    let mut resp = client.get("https://httpbin.org/ip").send().ok()?
+    // https://crates.io/crates/reqwest
         .json::<HashMap<String, String>>().ok()?;
     return resp.remove("origin");
 }
