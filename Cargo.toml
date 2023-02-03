@@ -1,0 +1,13 @@
+[package]
+name = "chahami"
+version = "0.1.0"
+edition = "2021"
+
+authors = ["Kendrick Gruenberg <k.gruenberg@tu-bs.de>"]
+license-file = "LICENSE"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.20.1" # https://crates.io/crates/eframe # MIT OR Apache-2.0
+reqwest = { version = "0.11", features = ["blocking", "json"] } # https://crates.io/crates/reqwest # MIT OR Apache-2.0
