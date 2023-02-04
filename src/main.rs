@@ -99,6 +99,18 @@ impl eframe::App for ChahamiApp {
 
             ui.label("Do NOT close this window!");
         });
+
+        // https://www.reddit.com/r/rust/comments/we84ch/how_do_i_comunicate_with_an_egui_app/:
+        // "You can force eframe to call update again as soon as possible by
+        //  calling request_repaint() on the egui Context, if you call this
+        //  every time in update then it will run in a loop constantly
+        //  regardless of if the gui needs to be repainted or not." (user Googe14)
+        //
+        // This is necessary here because within the threads spawned by the go()
+        // function, the status_labels will be updated.
+        // Passing the context to these threads is not easily possible due to
+        // lifetimes.
+        ctx.request_repaint();
     }
 }
 
