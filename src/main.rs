@@ -5,11 +5,11 @@ use eframe::egui::Color32;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::sync::{RwLock, Arc};
-use std::net::{UdpSocket, IpAddr, SocketAddr, Ipv4Addr};
+use std::net::{IpAddr, SocketAddr, Ipv4Addr};
+use tokio::net::UdpSocket;
 use std::str::FromStr;
-use quiche::ConnectionId;
-use rand::Rng;
-use std::thread;
+
+use s2n_quic::{client::Connect, Client, Server};
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
 const CHAHAMI_PORT: u16 = 13137; // 3137 == 0xc41 (as in "ChAhamI")
@@ -30,6 +30,7 @@ fn main() {
 }
 
 struct ChahamiApp {
+    tokio_runtime: Arc<tokio::runtime::Runtime>,
     my_global_ip_address: String,
     port_shared: String,
     peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
@@ -40,6 +41,10 @@ struct ChahamiApp {
 impl Default for ChahamiApp {
     fn default() -> Self {
         Self {
+            tokio_runtime: Arc::new(tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()),
             my_global_ip_address: get_my_global_ip_address().unwrap_or("?????".to_owned()),
             port_shared: "".to_owned(),
             peer_ip_addresses: Default::default(),
@@ -89,6 +94,7 @@ impl eframe::App for ChahamiApp {
                     if self.port_shared.trim() == "" || port_shared_is_valid {
                         self.gone = true;
                         go(
+                            self.tokio_runtime.clone(),
                             self.port_shared.clone(),
                             self.peer_ip_addresses.clone(),
                             self.status_labels.clone()
@@ -127,45 +133,60 @@ fn get_my_global_ip_address() -> Option<String> {
 }
 
 /// Executed when the user clicks the "Go!" button:
-fn go(port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
+fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
+    port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
     status_labels: Arc<[RwLock<String>; MAX_NUMBER_OF_PEERS]>) {
     for i in 0..MAX_NUMBER_OF_PEERS {
         if peer_ip_addresses[i].trim() != "" { // For each peer the user specified:
             let port_shared = port_shared.clone();
             let peer_ip_address = peer_ip_addresses[i].clone();
             let status_labels = status_labels.clone();
-            thread::spawn(move || { // Start a thread (for each peer) here already such that punching to all peers is performed simultaneously.
-                loop { // Looping to restart punching when quiche::connect() / quiche::accept() fails:
+            tokio_runtime.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
+                loop { // Looping to restart punching when the QUIC connection fails (initially or sometime later):
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
-                    while !punch_hole(IpAddr::from_str(&peer_ip_address).unwrap()) {
+                    while !punch_hole(IpAddr::from_str(&peer_ip_address).unwrap()).await {
                         counter += 1;
                         *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
                     }
                     *status_labels[i].write().unwrap() = format!("Punching succeeded");
 
-                    // After punching succeeded, connect using QUIC and start localhost forwarding:
-                    let mut quiche_config = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("creating quiche::Config failed");
-                    quiche_config.verify_peer(false); // (We're communicating peer-to-peer.)
-                    let quiche_scid = generate_random_scid();
-                    let quiche_scid = quiche::ConnectionId::from_ref(&quiche_scid);
-                    let quiche_local: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), CHAHAMI_PORT);
-                    let quiche_peer: SocketAddr = SocketAddr::new(IpAddr::from_str(&peer_ip_address).unwrap(), CHAHAMI_PORT);
-                    if port_shared.trim() == "" { // We are a client peer: Do a quiche::connect():
-                        if let Ok(conn) = quiche::connect(None, &quiche_scid, quiche_local, quiche_peer, &mut quiche_config) {
-                            // Open up TCP socket and link to QUIC socket:
-                            // ToDo
-                            *status_labels[i].write().unwrap() = format!("127.0.0.1:{}", "ToDo");
-                        }
-                    } else { // We are a server peer: Do a quiche::accept():
+                    // After punching succeeded, (A) connect using QUIC and (B) start localhost forwarding:
+                    if port_shared.trim() == "" { // We are a client peer: Build a s2n_quic::Client:
+                        // (B) Open up TCP socket and (A) link to QUIC socket:
+
+                        // (A) QUIC client:
+                        // ToDo
+
+                        // (B) localhost TCP server (to which the client application will connect):
+                        // ToDo
+
+                        // Link (A) and (B) together using two new threads
+                        //   and join the two in order to continue the loop and start re-punching when either the
+                        //   global QUIC connection or the local TCP connection fails/is terminated:
+                        // ToDo
+
+                        *status_labels[i].write().unwrap() = format!("127.0.0.1:{}", "ToDo");
+                    } else { // We are a server peer: Build a s2n_quic::Server:
+                        // (B) Open up TCP socket and (A) link to QUIC socket:
+
                         let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
 
-                        if let Ok(conn) = quiche::accept(&quiche_scid, None, quiche_local, quiche_peer, &mut quiche_config) {
-                            // Open up TCP socket and link to QUIC socket:
-                            // ToDo
-                            *status_labels[i].write().unwrap() = format!("127.0.0.1:{}", "ToDo");
-                        }
+                        // (A) QUIC server:
+                        // ToDO
+                        
+                        // (B) localhost TCP client
+                        //     (simulating the external clients and connecting to the localhost server being exposed):
+                        // ToDo
+
+                        // Link (A) and (B) together using two new threads
+                        //   and join the two in order to continue the loop and start re-punching when either the
+                        //   global QUIC connection or the local TCP connection fails/is terminated:
+                        // ToDo
+                        *status_labels[i].write().unwrap() = format!("Connected");
+                        // ToDo: join
+                        *status_labels[i].write().unwrap() = format!("Connection lost");
                     }
                 }
             });
@@ -186,11 +207,12 @@ fn go(port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
 ///   or xx:xx:55 exactly.
 /// * This function then waits for a response packet for up to 4 seconds
 ///   (timeout).
-fn punch_hole(ip_addr: IpAddr) -> bool {
+async fn punch_hole(ip_addr: IpAddr) -> bool {
     // Prepare UDP socket:
     let socket = UdpSocket::bind(("0.0.0.0", CHAHAMI_PORT))
+        .await
         .expect("punching failed: couldn't bind to address 0.0.0.0:CHAHAMI_PORT");
-    socket.connect((ip_addr, CHAHAMI_PORT)).expect("connect function failed");
+    socket.connect((ip_addr, CHAHAMI_PORT)).await.expect("connect function failed");
 
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -202,23 +224,19 @@ fn punch_hole(ip_addr: IpAddr) -> bool {
     }
 
     // Punch:
-    socket.send(PUNCH_MESSAGE.as_ref()).expect("punching failed: couldn't send data");
+    socket.send(PUNCH_MESSAGE.as_ref()).await.expect("punching failed: couldn't send data");
 
-    socket.set_read_timeout(Some(Duration::from_millis(PUNCH_TIMEOUT))).expect("punching failed: set_read_timeout() failed");
+    // On a synchronous std::net::UdpSocket we would now do the following before calling .recv():
+    // socket.set_read_timeout(Some(Duration::from_millis(PUNCH_TIMEOUT))).expect("punching failed: set_read_timeout() failed");
+    // A tokio::net::UdpSocket however has no such method, instead use tokio::time::timeout
+    // (cf. https://github.com/tokio-rs/tokio/issues/510):
 
     let mut buf = [0; 64];
-    if let Ok(number_of_bytes) = socket.recv(&mut buf) {
+    if let Ok(Ok(number_of_bytes)) = tokio::time::timeout(Duration::from_millis(PUNCH_TIMEOUT), socket.recv(&mut buf)).await {
         let filled_buf = &mut buf[..number_of_bytes];
         return String::from_utf8(filled_buf.to_vec()) == Ok(PUNCH_MESSAGE.to_owned());
         // returns true when the expected PUNCH_MESSAGE was received
     } else {
         return false; // no response after timeout: punch failed (this time)
     }
-}
-
-fn generate_random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
-    // On https://android.googlesource.com/platform/external/rust/crates/quiche/+/HEAD/examples/client.rs
-    //   implemented using the ring crate; the ring crate however is under a non-standard license.
-    // Here implemented using the rand crate; which is under the MIT or Apache-2.0 license:
-    rand::thread_rng().gen::<[u8; quiche::MAX_CONN_ID_LEN]>()
 }
