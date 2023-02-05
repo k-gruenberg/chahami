@@ -15,3 +15,4 @@ In contrast to other proprietary software serving a similar purpose, this tool..
 # Disadvantages
 * does **not** set up a full-fledged VPN; only TCP connections to one peer are tunneled and only for one specific port
 * requires server and clients to share IP addresses in advance
+* does **not** support multiple peers to be behind the same NAT as of now
