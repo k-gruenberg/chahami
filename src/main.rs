@@ -165,7 +165,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
                             .start().unwrap();
                         let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT).parse().unwrap();
-                        let connect = s2n_quic::client::Connect::new(addr);
+                        let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
                         let mut connection = client.connect(connect).await.unwrap();
                         connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
                         let stream = connection.open_bidirectional_stream().await.unwrap();
