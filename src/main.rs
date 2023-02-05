@@ -202,7 +202,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
 
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
+                        let quic_server_cert: &[u8] = include_bytes!("../quic_server_cert.pem");
+                        let quic_server_key: &[u8] = include_bytes!("../quic_server_key.pem");
                         let mut server = s2n_quic::Server::builder()
+                            .with_tls((quic_server_cert, quic_server_key)).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
                             .start().unwrap();
                         // Wait for other peer (QUIC client) to connect:
