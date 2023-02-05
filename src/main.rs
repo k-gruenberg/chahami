@@ -134,7 +134,7 @@ fn go(port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
             let port_shared = port_shared.clone();
             let peer_ip_address = peer_ip_addresses[i].clone();
             let status_labels = status_labels.clone();
-            thread::spawn(move || {
+            thread::spawn(move || { // Start a thread (for each peer) here already such that punching to all peers is performed simultaneously.
                 loop { // Looping to restart punching when quiche::connect() / quiche::accept() fails:
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
@@ -144,9 +144,10 @@ fn go(port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
                         *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
                     }
                     *status_labels[i].write().unwrap() = format!("Punching succeeded");
+
                     // After punching succeeded, connect using QUIC and start localhost forwarding:
                     let mut quiche_config = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("creating quiche::Config failed");
-                    quiche_config.verify_peer(false);
+                    quiche_config.verify_peer(false); // (We're communicating peer-to-peer.)
                     let quiche_scid = generate_random_scid();
                     let quiche_scid = quiche::ConnectionId::from_ref(&quiche_scid);
                     let quiche_local: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), CHAHAMI_PORT);
