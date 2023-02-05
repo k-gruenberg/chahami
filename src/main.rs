@@ -8,7 +8,7 @@ use std::sync::{RwLock, Arc};
 use std::net::{UdpSocket, IpAddr, SocketAddr, Ipv4Addr};
 use std::str::FromStr;
 use quiche::ConnectionId;
-use ring::rand::*;
+use rand::Rng;
 use std::thread;
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
@@ -215,10 +215,9 @@ fn punch_hole(ip_addr: IpAddr) -> bool {
     }
 }
 
-fn generate_random_scid() -> [u8; 20] {
-    // Source: https://android.googlesource.com/platform/external/rust/crates/quiche/+/HEAD/examples/client.rs
-    // Generate a random source connection ID for the connection.
-    let mut scid = [0; quiche::MAX_CONN_ID_LEN];
-    SystemRandom::new().fill(&mut scid[..]).unwrap();
-    return scid;
+fn generate_random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
+    // On https://android.googlesource.com/platform/external/rust/crates/quiche/+/HEAD/examples/client.rs
+    //   implemented using the ring crate; the ring crate however is under a non-standard license.
+    // Here implemented using the rand crate; which is under the MIT or Apache-2.0 license:
+    rand::thread_rng().gen::<[u8; quiche::MAX_CONN_ID_LEN]>()
 }
