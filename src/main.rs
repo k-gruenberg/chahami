@@ -8,6 +8,9 @@ use std::sync::{RwLock, Arc};
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
+use tempfile::{NamedTempFile, TempPath};
+use std::io::Write;
+use std::path::Path;
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
 const CHAHAMI_PORT: u16 = 13137; // 3137 == 0xc41 (as in "ChAhamI")
@@ -202,10 +205,14 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
 
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
-                        let quic_server_cert: &[u8] = include_bytes!("../quic_server_cert.pem");
-                        let quic_server_key: &[u8] = include_bytes!("../quic_server_key.pem");
+                        let quic_server_temp_cert_file = NamedTempFile::new().unwrap();
+                        let quic_server_temp_key_file = NamedTempFile::new().unwrap();
+                        write!(quic_server_temp_cert_file.as_file(), include_str!("../quic_server_cert.pem")).unwrap();
+                        write!(quic_server_temp_key_file.as_file(), include_str!("../quic_server_key.pem")).unwrap();
+
                         let mut server = s2n_quic::Server::builder()
-                            .with_tls((quic_server_cert, quic_server_key)).unwrap()
+                            .with_tls((<TempPath as AsRef<Path>>::as_ref(&quic_server_temp_cert_file.into_temp_path()),
+                                <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_key_file.into_temp_path()))).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
                             .start().unwrap();
                         // Wait for other peer (QUIC client) to connect:
