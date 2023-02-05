@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::sync::{RwLock, Arc};
 use std::net::{IpAddr, SocketAddr, Ipv4Addr};
-use tokio::net::UdpSocket;
+use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
 
 use s2n_quic::{client::Connect, Client, Server};
@@ -112,9 +112,9 @@ impl eframe::App for ChahamiApp {
         //  every time in update then it will run in a loop constantly
         //  regardless of if the gui needs to be repainted or not." (user Googe14)
         //
-        // This is necessary here because within the threads spawned by the go()
+        // This is necessary here because within the tasks spawned by the go()
         // function, the status_labels will be updated.
-        // Passing the context to these threads is not easily possible due to
+        // Passing the context to these tasks is not easily possible due to
         // lifetimes.
         ctx.request_repaint();
     }
@@ -141,7 +141,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
             let port_shared = port_shared.clone();
             let peer_ip_address = peer_ip_addresses[i].clone();
             let status_labels = status_labels.clone();
-            tokio_runtime.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
+            let tokio_runtime_clone_1 = tokio_runtime.clone();
+            let tokio_runtime_clone_2 = tokio_runtime.clone();
+            let tokio_runtime_clone_3 = tokio_runtime.clone();
+            tokio_runtime_clone_1.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
                 loop { // Looping to restart punching when the QUIC connection fails (initially or sometime later):
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
@@ -156,18 +159,43 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     if port_shared.trim() == "" { // We are a client peer: Build a s2n_quic::Client:
                         // (B) Open up TCP socket and (A) link to QUIC socket:
 
-                        // (A) QUIC client:
-                        // ToDo
+                        // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
+                        tokio::time::sleep(Duration::from_millis(1000)).await; // Wait a little such that the other peer may start its QUIC server!
+                        let client = s2n_quic::Client::builder()
+                            .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
+                            .start().unwrap();
+                        let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT).parse().unwrap();
+                        let connect = s2n_quic::client::Connect::new(addr);
+                        let mut connection = client.connect(connect).await.unwrap();
+                        connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
+                        let stream = connection.open_bidirectional_stream().await.unwrap();
+                        let (mut quic_receive_stream, mut quic_send_stream) = stream.split();
 
                         // (B) localhost TCP server (to which the client application will connect):
-                        // ToDo
+                        let addr = "0.0.0.0:0".parse::<SocketAddr>().unwrap(); // Port number = 0 means OS will assign a port
+                        let listener = TcpListener::bind(&addr).await.unwrap();
 
-                        // Link (A) and (B) together using two new threads
+                        // Display the user the address of the local TCP proxy to connect to:
+                        *status_labels[i].write().unwrap() = format!("{:?}", listener.local_addr());
+
+                        // Now wait for the user to connect:
+                        let (tcp_stream, _remote_peer) = listener.accept().await.unwrap();
+                        // One needs to use .into_split() as suggested on https://github.com/tokio-rs/tokio-core/issues/198:
+                        let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
+
+                        // Link (A) and (B) together using two new tasks
                         //   and join the two in order to continue the loop and start re-punching when either the
                         //   global QUIC connection or the local TCP connection fails/is terminated:
-                        // ToDo
+                        let receive_task = tokio_runtime_clone_2.spawn(async move {
+                            // Write everything to our TCP client that we receive via QUIC:
+                            tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
+                        });
+                        let send_task = tokio_runtime_clone_3.spawn(async move {
+                            // Write everything to our QUIC server that we receive from our TCP client:
+                            tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
+                        });
 
-                        *status_labels[i].write().unwrap() = format!("127.0.0.1:{}", "ToDo");
+                        tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again... 
                     } else { // We are a server peer: Build a s2n_quic::Server:
                         // (B) Open up TCP socket and (A) link to QUIC socket:
 
@@ -180,7 +208,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         //     (simulating the external clients and connecting to the localhost server being exposed):
                         // ToDo
 
-                        // Link (A) and (B) together using two new threads
+                        // Link (A) and (B) together using two new tasks
                         //   and join the two in order to continue the loop and start re-punching when either the
                         //   global QUIC connection or the local TCP connection fails/is terminated:
                         // ToDo
