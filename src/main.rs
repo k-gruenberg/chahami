@@ -22,7 +22,7 @@ const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time t
 
 fn main() {
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(290.0, 350.0)),
+        initial_window_size: Some(egui::vec2(320.0, 350.0)),
         ..Default::default()
     };
     eframe::run_native(
@@ -168,11 +168,23 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
-                    while !punch_hole(IpAddr::from_str(&peer_ip_address).unwrap(), CHAHAMI_PORT + (i as u16)).await {
-                        counter += 1;
-                        *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
+                    loop {
+                        match punch_hole(IpAddr::from_str(&peer_ip_address).unwrap(), CHAHAMI_PORT + (i as u16)).await {
+                            Ok(false) => { // UDP hole punching failed:
+                                counter += 1;
+                                *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
+                                // continue (innermost) loop and try again... (and again and again and again...)
+                            },
+                            Ok(true) => { // UDP hole punching succeeded:
+                                *status_labels[i].write().unwrap() = format!("Punching succeeded");
+                                break; // break out of (innermost) loop to stop punching
+                            },
+                            Err(err) => { // UDP hole punching could not be performed at all due to a tokio::io::Error:
+                                *status_labels[i].write().unwrap() = format!("Couldn't punch: {}", err);
+                                return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
+                            }
+                        }
                     }
-                    *status_labels[i].write().unwrap() = format!("Punching succeeded");
 
                     // After punching succeeded, (A) connect using QUIC and (B) start localhost forwarding:
 
@@ -287,12 +299,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 ///   or xx:xx:55 exactly.
 /// * This function then waits for a response packet for up to 4 seconds
 ///   (timeout).
-async fn punch_hole(ip_addr: IpAddr, port: u16) -> bool {
+async fn punch_hole(ip_addr: IpAddr, port: u16) -> Result<bool, tokio::io::Error> {
     // Prepare UDP socket:
-    let socket = UdpSocket::bind(("0.0.0.0", port))
-        .await
-        .unwrap_or_else(|err| panic!("punching failed: couldn't bind to address 0.0.0.0:{}: {}", port, err)); // lambda avoids unecessary string formatting in success case
-    socket.connect((ip_addr, port)).await.expect("connect function failed");
+    let socket = UdpSocket::bind(("0.0.0.0", port)).await?;
+    socket.connect((ip_addr, port)).await?;
 
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -309,7 +319,7 @@ async fn punch_hole(ip_addr: IpAddr, port: u16) -> bool {
     //        [...] some platforms (specifically Windows) will provide timers with a larger resolution than 1 ms."
 
     // Punch:
-    socket.send(PUNCH_MESSAGE.as_ref()).await.expect("punching failed: couldn't send data");
+    socket.send(PUNCH_MESSAGE.as_ref()).await?;
 
     // On a synchronous std::net::UdpSocket we would now do the following before calling .recv():
     // socket.set_read_timeout(Some(Duration::from_millis(PUNCH_TIMEOUT))).expect("punching failed: set_read_timeout() failed");
@@ -319,9 +329,9 @@ async fn punch_hole(ip_addr: IpAddr, port: u16) -> bool {
     let mut buf = [0; 64];
     if let Ok(Ok(number_of_bytes)) = tokio::time::timeout(Duration::from_millis(PUNCH_TIMEOUT), socket.recv(&mut buf)).await {
         let filled_buf = &mut buf[..number_of_bytes];
-        return String::from_utf8(filled_buf.to_vec()) == Ok(PUNCH_MESSAGE.to_owned());
+        return Ok(String::from_utf8(filled_buf.to_vec()) == Ok(PUNCH_MESSAGE.to_owned()));
         // returns true when the expected PUNCH_MESSAGE was received
     } else {
-        return false; // no response after timeout: punch failed (this time)
+        return Ok(false); // no response after timeout: punch failed (this time)
     }
 }
