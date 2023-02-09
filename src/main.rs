@@ -10,14 +10,15 @@ use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
 use tempfile::{NamedTempFile, TempPath};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
-const CHAHAMI_PORT: u16 = 13137; // 3137 == 0xc41 (as in "ChAhamI")
+const CHAHAMI_PORT: u16 = 13130; // UDP ports CHAHAMI_PORT to CHAHAMI_PORT+MAX_NUMBER_OF_PEERS-1 will be used for communication
 const PUNCH_INTERVAL_IN_MILLIS: f64 = 5_000.0; // the punch time is every 5,000 milliseconds
 const PUNCH_TIMEOUT: u64 = 4_000; // after having punched, wait 4,000 milliseconds for a response until considering the punch as a failure
 const PUNCH_MESSAGE: &str = "PUNCH"; // the message sent when punching; completely irrelevant
-const QUIC_SERVER_SETUP_TIME_IN_MILLIS: u64 = 2_000; // the time that the QUIC client will wait until trying to connect to the QUIC server
+const QUIC_SERVER_SETUP_TIME_IN_MILLIS: u64 = 3_000; // the time that the QUIC client will wait until trying to connect to the QUIC server
+const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time to display an error message to the user
 
 fn main() {
     let options = eframe::NativeOptions {
@@ -78,6 +79,7 @@ impl eframe::App for ChahamiApp {
             ui.label(format!("Your peers:"));
             for i in 0..MAX_NUMBER_OF_PEERS {
                 ui.horizontal(|ui| {
+                    ui.label(format!("#{}", i));
                     ui.style_mut().spacing.text_edit_width = 125.0;
                     let ip_addr_is_valid = IpAddr::from_str(&self.peer_ip_addresses[i]).is_ok();
                     ui.add(
@@ -106,6 +108,9 @@ impl eframe::App for ChahamiApp {
             }
 
             ui.label("Do NOT close this window!");
+            // Not showing the following help info because it makes the UI look ugly:
+            //ui.label("Server peer and client peer must enter their");
+            //ui.label("respective IP addresses under the same # index.");
         });
 
         // https://www.reddit.com/r/rust/comments/we84ch/how_do_i_comunicate_with_an_egui_app/:
@@ -138,11 +143,23 @@ fn get_my_global_ip_address() -> Option<String> {
 fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
     port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
     status_labels: Arc<[RwLock<String>; MAX_NUMBER_OF_PEERS]>) {
+    // Both QUIC client and QUIC server need the server's certificate (and key in case of the server):
+    // Beware that this is only because of a requirement of the s2n_quic crate used,
+    // it does not add much of security since the private key is hardcoded and publicly known!
+    let quic_server_temp_cert_file = NamedTempFile::new().expect("creating temp cert file failed");
+    let quic_server_temp_key_file = NamedTempFile::new().expect("creating temp key file failed");
+    write!(quic_server_temp_cert_file.as_file(), include_str!("../quic_server_cert.pem")).expect("writing to temp cert file failed");
+    write!(quic_server_temp_key_file.as_file(), include_str!("../quic_server_key.pem")).expect("writing to temp key file failed");
+    let quic_server_temp_cert_file_path: PathBuf = <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_cert_file.into_temp_path()).to_path_buf();
+    let quic_server_temp_key_file_path: PathBuf = <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_key_file.into_temp_path()).to_path_buf();
+
     for i in 0..MAX_NUMBER_OF_PEERS {
         if peer_ip_addresses[i].trim() != "" { // For each peer the user specified:
             let port_shared = port_shared.clone();
             let peer_ip_address = peer_ip_addresses[i].clone();
             let status_labels = status_labels.clone();
+            let quic_server_temp_cert_file_path_clone = quic_server_temp_cert_file_path.clone();
+            let quic_server_temp_key_file_path_clone = quic_server_temp_key_file_path.clone();
             let tokio_runtime_clone_1 = tokio_runtime.clone();
             let tokio_runtime_clone_2 = tokio_runtime.clone();
             let tokio_runtime_clone_3 = tokio_runtime.clone();
@@ -151,28 +168,31 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
-                    while !punch_hole(IpAddr::from_str(&peer_ip_address).unwrap()).await {
+                    while !punch_hole(IpAddr::from_str(&peer_ip_address).unwrap(), CHAHAMI_PORT + (i as u16)).await {
                         counter += 1;
                         *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
                     }
                     *status_labels[i].write().unwrap() = format!("Punching succeeded");
 
                     // After punching succeeded, (A) connect using QUIC and (B) start localhost forwarding:
+
                     if port_shared.trim() == "" { // We are a client peer: Build a s2n_quic::Client:
                         // (B) Open up TCP socket and (A) link to QUIC socket:
 
-                        // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
-                        // Wait a little such that the other peer may start its QUIC server:
+                        // Wait a little before starting the QUIC client such that the other peer may start its QUIC server:
                         tokio::time::sleep(Duration::from_millis(QUIC_SERVER_SETUP_TIME_IN_MILLIS)).await;
-                        let client = s2n_quic::Client::builder()
-                            .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
+
+                        // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
+                        let quic_client = s2n_quic::Client::builder()
+                            .with_tls(quic_server_temp_cert_file_path_clone.as_path()).unwrap()
+                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
                             .start().unwrap();
-                        let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT).parse().unwrap();
+                        let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT + (i as u16)).parse().unwrap();
                         let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
-                        let mut connection = client.connect(connect).await.unwrap();
-                        connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
-                        let stream = connection.open_bidirectional_stream().await.unwrap();
-                        let (mut quic_receive_stream, mut quic_send_stream) = stream.split();
+                        let mut quic_connection = quic_client.connect(connect).await.unwrap();
+                        quic_connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
+                        let quic_stream = quic_connection.open_bidirectional_stream().await.unwrap();
+                        let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
 
                         // (B) localhost TCP server (to which the client application will connect):
                         let addr = "0.0.0.0:0".parse::<SocketAddr>().unwrap(); // Port number = 0 means OS will assign a port
@@ -182,48 +202,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         *status_labels[i].write().unwrap() = format!("{:?}", listener.local_addr());
 
                         // Now wait for the user to connect:
-                        let (tcp_stream, _remote_peer) = listener.accept().await.unwrap();
-                        // One needs to use .into_split() as suggested on https://github.com/tokio-rs/tokio-core/issues/198:
-                        let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
-
-                        // Link (A) and (B) together using two new tasks
-                        //   and join the two in order to continue the loop and start re-punching when either the
-                        //   global QUIC connection or the local TCP connection fails/is terminated:
-                        let receive_task = tokio_runtime_clone_2.spawn(async move {
-                            // Write everything to our TCP client that we receive via QUIC:
-                            tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
-                        });
-                        let send_task = tokio_runtime_clone_3.spawn(async move {
-                            // Write everything to our QUIC server that we receive from our TCP client:
-                            tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
-                        });
-
-                        let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again... 
-                    } else { // We are a server peer: Build a s2n_quic::Server:
-                        // (B) Open up TCP socket and (A) link to QUIC socket:
-
-                        let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
-
-                        // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
-                        let quic_server_temp_cert_file = NamedTempFile::new().unwrap();
-                        let quic_server_temp_key_file = NamedTempFile::new().unwrap();
-                        write!(quic_server_temp_cert_file.as_file(), include_str!("../quic_server_cert.pem")).unwrap();
-                        write!(quic_server_temp_key_file.as_file(), include_str!("../quic_server_key.pem")).unwrap();
-
-                        let mut server = s2n_quic::Server::builder()
-                            .with_tls((<TempPath as AsRef<Path>>::as_ref(&quic_server_temp_cert_file.into_temp_path()),
-                                <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_key_file.into_temp_path()))).unwrap()
-                            .with_io(("0.0.0.0", CHAHAMI_PORT)).unwrap()
-                            .start().unwrap();
-                        // Wait for other peer (QUIC client) to connect:
-                        *status_labels[i].write().unwrap() = format!("Waiting for other to connect");
-                        if let Some(mut connection) = server.accept().await {
-                            let stream = connection.open_bidirectional_stream().await.unwrap();
-                            let (mut quic_receive_stream, mut quic_send_stream) = stream.split();
-
-                            // (B) localhost TCP client
-                            //     (simulating the external client and connecting to the localhost server being exposed):
-                            let tcp_stream = TcpStream::connect(("127.0.0.1", localhost_port_shared)).await.unwrap();
+                        if let Ok((tcp_stream, _remote_peer)) = listener.accept().await {
+                            // One needs to use .into_split() as suggested on https://github.com/tokio-rs/tokio-core/issues/198:
                             let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
 
                             // Link (A) and (B) together using two new tasks
@@ -237,12 +217,56 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 // Write everything to our QUIC server that we receive from our TCP client:
                                 tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
                             });
-                            *status_labels[i].write().unwrap() = format!("Connected");
-                            let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again...
-                            *status_labels[i].write().unwrap() = format!("Connection lost");
+
+                            let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again... 
+                        } else {
+                            *status_labels[i].write().unwrap() = format!("Accepting local conn failed");
+                            // Before punching again, wait a few seconds to allow the user to see and read the error message printed above:
+                            tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                        }
+                    } else { // We are a server peer: Build a s2n_quic::Server:
+                        // (B) Open up TCP socket and (A) link to QUIC socket:
+
+                        let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
+
+                        // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
+                        let mut quic_server = s2n_quic::Server::builder()
+                            .with_tls((quic_server_temp_cert_file_path_clone.as_path(), quic_server_temp_key_file_path_clone.as_path())).unwrap()
+                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
+                            .start().unwrap();
+                        // Wait for other peer (QUIC client) to connect:
+                        *status_labels[i].write().unwrap() = format!("Waiting for other to connect");
+                        if let Some(mut quic_connection) = quic_server.accept().await {
+                            let quic_stream = quic_connection.open_bidirectional_stream().await.unwrap();
+                            let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
+
+                            // (B) localhost TCP client
+                            //     (simulating the external client and connecting to the localhost server being exposed):
+                            if let Ok(tcp_stream) = TcpStream::connect(("127.0.0.1", localhost_port_shared)).await {
+                                let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
+
+                                // Link (A) and (B) together using two new tasks
+                                //   and join the two in order to continue the loop and start re-punching when either the
+                                //   global QUIC connection or the local TCP connection fails/is terminated:
+                                let receive_task = tokio_runtime_clone_2.spawn(async move {
+                                    // Write everything to our TCP client that we receive via QUIC:
+                                    tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
+                                });
+                                let send_task = tokio_runtime_clone_3.spawn(async move {
+                                    // Write everything to our QUIC server that we receive from our TCP client:
+                                    tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
+                                });
+                                *status_labels[i].write().unwrap() = format!("Connected");
+                                let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again...
+                                *status_labels[i].write().unwrap() = format!("Connection lost");
+                            } else {
+                                *status_labels[i].write().unwrap() = format!("Conn to 127.0.0.1:{} failed", localhost_port_shared);
+                            }
                         } else {
                             *status_labels[i].write().unwrap() = format!("Accepting conn failed");
                         }
+                        // Before punching again, wait a few seconds to allow the user to see and read the error message printed above:
+                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
                     }
                 }
             });
@@ -263,12 +287,12 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 ///   or xx:xx:55 exactly.
 /// * This function then waits for a response packet for up to 4 seconds
 ///   (timeout).
-async fn punch_hole(ip_addr: IpAddr) -> bool {
+async fn punch_hole(ip_addr: IpAddr, port: u16) -> bool {
     // Prepare UDP socket:
-    let socket = UdpSocket::bind(("0.0.0.0", CHAHAMI_PORT))
+    let socket = UdpSocket::bind(("0.0.0.0", port))
         .await
-        .expect("punching failed: couldn't bind to address 0.0.0.0:CHAHAMI_PORT");
-    socket.connect((ip_addr, CHAHAMI_PORT)).await.expect("connect function failed");
+        .unwrap_or_else(|err| panic!("punching failed: couldn't bind to address 0.0.0.0:{}: {}", port, err)); // lambda avoids unecessary string formatting in success case
+    socket.connect((ip_addr, port)).await.expect("connect function failed");
 
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -278,6 +302,11 @@ async fn punch_hole(ip_addr: IpAddr) -> bool {
     while SystemTime::now().duration_since(UNIX_EPOCH).unwrap() < punch_time {
         // wait...
     }
+    // Note: you might be tempted to use tokio::time::sleep(punch_time-now), or even better tokio::time::sleep_until(punch_time), here;
+    //       however busy waiting is more accurate and we need it to be accurate in order for UDP hole punching to work!
+    //       cf. quote from documentation of tokio::time::sleep():
+    //       "[...] should not be used for tasks that require high-resolution timers.
+    //        [...] some platforms (specifically Windows) will provide timers with a larger resolution than 1 ms."
 
     // Punch:
     socket.send(PUNCH_MESSAGE.as_ref()).await.expect("punching failed: couldn't send data");
