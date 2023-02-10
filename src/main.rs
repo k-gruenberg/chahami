@@ -248,10 +248,16 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
 
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
-                        let mut quic_server = s2n_quic::Server::builder()
+                        let mut quic_server = match s2n_quic::Server::builder()
                             .with_tls((quic_server_temp_cert_file_path_clone.as_path(), quic_server_temp_key_file_path_clone.as_path())).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
-                            .start().unwrap();
+                            .start() {
+                                Ok(quic_server) => quic_server,
+                                Err(err) => {
+                                    *status_labels[i].write().unwrap() = format!("Couldn't start QUIC server: {}", err);
+                                    return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
+                                }
+                            };
                         // Wait for other peer (QUIC client) to connect:
                         *status_labels[i].write().unwrap() = format!("Waiting for other to connect");
                         if let Some(mut quic_connection) = quic_server.accept().await {
