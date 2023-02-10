@@ -8,9 +8,9 @@ use std::sync::{RwLock, Arc};
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::NamedTempFile;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
 const CHAHAMI_PORT: u16 = 13130; // UDP ports CHAHAMI_PORT to CHAHAMI_PORT+MAX_NUMBER_OF_PEERS-1 will be used for communication
@@ -150,8 +150,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
     let quic_server_temp_key_file = NamedTempFile::new().expect("creating temp key file failed");
     write!(quic_server_temp_cert_file.as_file(), include_str!("../quic_server_cert.pem")).expect("writing to temp cert file failed");
     write!(quic_server_temp_key_file.as_file(), include_str!("../quic_server_key.pem")).expect("writing to temp key file failed");
-    let quic_server_temp_cert_file_path: PathBuf = <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_cert_file.into_temp_path()).to_path_buf();
-    let quic_server_temp_key_file_path: PathBuf = <TempPath as AsRef<Path>>::as_ref(&quic_server_temp_key_file.into_temp_path()).to_path_buf();
+    let quic_server_temp_cert_file_path: PathBuf = quic_server_temp_cert_file.path().to_path_buf();
+    let quic_server_temp_key_file_path: PathBuf = quic_server_temp_key_file.path().to_path_buf();
 
     for i in 0..MAX_NUMBER_OF_PEERS {
         if peer_ip_addresses[i].trim() != "" { // For each peer the user specified:
