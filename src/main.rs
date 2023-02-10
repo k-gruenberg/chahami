@@ -10,7 +10,7 @@ use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
 use std::path::PathBuf;
 
-const MAX_NUMBER_OF_PEERS: usize = 10;
+const MAX_NUMBER_OF_PEERS: usize = 10; // ToDo: dynamically increase when all 10 fields are full (or when sth. is intered into the last field)
 const CHAHAMI_PORT: u16 = 13130; // UDP ports CHAHAMI_PORT to CHAHAMI_PORT+MAX_NUMBER_OF_PEERS-1 will be used for communication
 const PUNCH_INTERVAL_IN_MILLIS: f64 = 5_000.0; // the punch time is every 5,000 milliseconds
 const PUNCH_TIMEOUT: u64 = 4_000; // after having punched, wait 4,000 milliseconds for a response until considering the punch as a failure
@@ -37,7 +37,7 @@ struct ChahamiApp {
     peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
     status_labels: Arc<[RwLock<String>; MAX_NUMBER_OF_PEERS]>,
     gone: bool, // = whether the "Go!" button has been clicked
-}
+} // ToDo: persistence !!!!! => struct ChahamiAppPersistent with port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS] fields
 
 impl Default for ChahamiApp {
     fn default() -> Self {
@@ -46,7 +46,7 @@ impl Default for ChahamiApp {
                 .enable_all()
                 .build()
                 .unwrap()),
-            my_global_ip_address: get_my_global_ip_address().unwrap_or("?????".to_owned()),
+            my_global_ip_address: get_my_global_ip_address().unwrap_or("?????".to_owned()), // ToDo: use future instead!!!!!
             port_shared: "".to_owned(),
             peer_ip_addresses: Default::default(),
             status_labels: Default::default(),
@@ -194,7 +194,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 break; // break out of (innermost) loop to stop punching
                             },
                             Err(err) => { // UDP hole punching could not be performed at all due to a tokio::io::Error:
-                                *status_labels[i].write().unwrap() = format!("Couldn't punch: {}", err);
+                                *status_labels[i].write().unwrap() = format!("Couldn't punch: {}", err); // ToDo: "address already in use" after connection loss!!!!!
                                 return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
                             }
                         }
@@ -221,7 +221,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             };
                         let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT + (i as u16)).parse().unwrap();
                         let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
-                        let mut quic_connection = quic_client.connect(connect).await.unwrap();
+                        let mut quic_connection = quic_client.connect(connect).await.unwrap(); // ToDo: handle MaxHandshakeDurationExceeded by restarting punching !!!!! !!!!! !!!!! !!!!!
                         quic_connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
                         let quic_stream = quic_connection.open_bidirectional_stream().await.unwrap();
                         let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
