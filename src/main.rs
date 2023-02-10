@@ -195,10 +195,16 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         tokio::time::sleep(Duration::from_millis(QUIC_SERVER_SETUP_TIME_IN_MILLIS)).await;
 
                         // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
-                        let quic_client = s2n_quic::Client::builder()
+                        let quic_client = match s2n_quic::Client::builder()
                             .with_tls(quic_server_temp_cert_file_path_clone.as_path()).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
-                            .start().unwrap();
+                            .start() {
+                                Ok(quic_client) => quic_client,
+                                Err(err) => {
+                                    *status_labels[i].write().unwrap() = format!("Couldn't start QUIC client: {}", err);
+                                    return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
+                                }
+                            };
                         let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT + (i as u16)).parse().unwrap();
                         let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
                         let mut quic_connection = quic_client.connect(connect).await.unwrap();
