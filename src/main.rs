@@ -9,6 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
 use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
 
 const MAX_NUMBER_OF_PEERS: usize = 10; // ToDo: dynamically increase when all 10 fields are full (or when sth. is intered into the last field)
 const CHAHAMI_PORT: u16 = 13130; // UDP ports CHAHAMI_PORT to CHAHAMI_PORT+MAX_NUMBER_OF_PEERS-1 will be used for communication
@@ -33,11 +34,17 @@ fn main() {
 struct ChahamiApp {
     tokio_runtime: Arc<tokio::runtime::Runtime>,
     my_global_ip_address: String,
-    port_shared: String,
-    peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
+    persistent_data: ChahamiAppPersistentData,
     status_labels: Arc<[RwLock<String>; MAX_NUMBER_OF_PEERS]>,
     gone: bool, // = whether the "Go!" button has been clicked
-} // ToDo: persistence !!!!! => struct ChahamiAppPersistent with port_shared: String, peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS] fields
+}
+
+/// Stores the user settings that shall persistent when the user closes and then reopens the app.
+#[derive(Serialize, Deserialize, Debug)]
+struct ChahamiAppPersistentData {
+    port_shared: String,
+    peer_ip_addresses: [String; MAX_NUMBER_OF_PEERS],
+}
 
 impl Default for ChahamiApp {
     fn default() -> Self {
@@ -47,27 +54,77 @@ impl Default for ChahamiApp {
                 .build()
                 .unwrap()),
             my_global_ip_address: get_my_global_ip_address().unwrap_or("?????".to_owned()), // ToDo: use future instead!!!!!
-            port_shared: "".to_owned(),
-            peer_ip_addresses: Default::default(),
+            persistent_data: ChahamiAppPersistentData::load().unwrap_or_else(|_| ChahamiAppPersistentData::default()),
             status_labels: Default::default(),
             gone: false,
         }
     }
 }
 
+impl Default for ChahamiAppPersistentData {
+    fn default() -> Self {
+        Self {
+            port_shared: "".to_owned(),
+            peer_ip_addresses: Default::default(),
+        }
+    }
+}
+
+impl ChahamiAppPersistentData {
+    fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let home_dir: PathBuf = dirs::home_dir().ok_or("could not get home directory")?;
+
+        let mut chahami_dir: PathBuf = home_dir;
+        chahami_dir.push(".chahami");
+
+        let mut chahami_config_json: PathBuf = chahami_dir;
+        chahami_config_json.push("config.json");
+    
+        if chahami_config_json.exists() {
+            Ok(serde_json::from_str(std::str::from_utf8(&std::fs::read(chahami_config_json)?)?)?)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let home_dir: PathBuf = dirs::home_dir().ok_or("could not get home directory")?;
+
+        let mut chahami_dir: PathBuf = home_dir;
+        chahami_dir.push(".chahami");
+        if !chahami_dir.exists() {
+            std::fs::create_dir(&chahami_dir)?;
+        }
+
+        let mut chahami_config_json: PathBuf = chahami_dir;
+        chahami_config_json.push("config.json");
+
+        std::fs::write(&chahami_config_json, serde_json::to_string(&self)?)?;
+
+        Ok(())
+    }
+}
+
 impl eframe::App for ChahamiApp {
+    fn on_close_event(&mut self) -> bool { // ToDo: ask when user tries to close window AND self.gone==true, cf. https://github.com/emilk/egui/blob/master/examples/confirm_exit/src/main.rs
+        if let Err(err) = self.persistent_data.save() {
+            eprintln!("Persisting data failed: {}", err);
+        }
+        true // do not abort closing
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Chahami");
 
             ui.label(format!("Your global IP address: {}", &mut self.my_global_ip_address));
             
-            let port_shared_is_valid: bool = self.port_shared.parse::<u16>().is_ok();
+            let port_shared_is_valid: bool = self.persistent_data.port_shared.parse::<u16>().is_ok();
             ui.horizontal(|ui| {
                 let my_port_label = ui.label("The port you share: ");
                 ui.style_mut().spacing.text_edit_width = 50.0;
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.port_shared)
+                    egui::TextEdit::singleline(&mut self.persistent_data.port_shared)
                     .interactive(!self.gone) // disables editing once "Go!" has been pressed
                     .text_color(if port_shared_is_valid {Color32::LIGHT_GREEN} else {Color32::RED})
                 );
@@ -79,9 +136,9 @@ impl eframe::App for ChahamiApp {
                 ui.horizontal(|ui| {
                     ui.label(format!("#{}", i));
                     ui.style_mut().spacing.text_edit_width = 125.0;
-                    let ip_addr_is_valid = IpAddr::from_str(&self.peer_ip_addresses[i]).is_ok();
+                    let ip_addr_is_valid = IpAddr::from_str(&self.persistent_data.peer_ip_addresses[i]).is_ok();
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.peer_ip_addresses[i])
+                        egui::TextEdit::singleline(&mut self.persistent_data.peer_ip_addresses[i])
                         .interactive(!self.gone) // disables editing once "Go!" has been pressed
                         .text_color(if ip_addr_is_valid {Color32::LIGHT_GREEN} else {Color32::RED})
                     );
@@ -93,12 +150,12 @@ impl eframe::App for ChahamiApp {
                 if ui.button("Go!").clicked() {
                     // Clicking "Go!" only works when the shared port text field
                     // is either empty or contains a valid port number:
-                    if self.port_shared.trim() == "" || port_shared_is_valid {
+                    if self.persistent_data.port_shared.trim() == "" || port_shared_is_valid {
                         self.gone = true;
                         go(
                             self.tokio_runtime.clone(),
-                            self.port_shared.clone(),
-                            self.peer_ip_addresses.clone(),
+                            self.persistent_data.port_shared.clone(),
+                            self.persistent_data.peer_ip_addresses.clone(),
                             self.status_labels.clone()
                         );
                     }
@@ -231,7 +288,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         let listener = TcpListener::bind(&addr).await.unwrap();
 
                         // Display the user the address of the local TCP proxy to connect to:
-                        *status_labels[i].write().unwrap() = format!("{:?}", listener.local_addr());
+                        *status_labels[i].write().unwrap() = format!("{:?}", listener.local_addr()); // ToDo: does not seem to be correct/working; display 127.0.0.1 intstead of 0.0.0.0 and without "Ok()"
 
                         // Now wait for the user to connect:
                         if let Ok((tcp_stream, _remote_peer)) = listener.accept().await {
