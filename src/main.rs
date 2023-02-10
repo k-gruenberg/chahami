@@ -146,10 +146,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
     // Both QUIC client and QUIC server need the server's certificate (and key in case of the server):
     // Beware that this is only because of a requirement of the s2n_quic crate used,
     // it does not add much of security since the private key is hardcoded and publicly known!
-    let quic_server_temp_cert_file = NamedTempFile::new().expect("creating temp cert file failed");
-    let quic_server_temp_key_file = NamedTempFile::new().expect("creating temp key file failed");
-    write!(quic_server_temp_cert_file.as_file(), include_str!("../quic_server_cert.pem")).expect("writing to temp cert file failed");
-    write!(quic_server_temp_key_file.as_file(), include_str!("../quic_server_key.pem")).expect("writing to temp key file failed");
+    let mut quic_server_temp_cert_file = NamedTempFile::new().expect("creating temp cert file failed");
+    let mut quic_server_temp_key_file = NamedTempFile::new().expect("creating temp key file failed");
+    write!(quic_server_temp_cert_file, include_str!("../quic_server_cert.pem")).expect("writing to temp cert file failed");
+    write!(quic_server_temp_key_file, include_str!("../quic_server_key.pem")).expect("writing to temp key file failed");
     let quic_server_temp_cert_file_path: PathBuf = quic_server_temp_cert_file.path().to_path_buf();
     let quic_server_temp_key_file_path: PathBuf = quic_server_temp_key_file.path().to_path_buf();
 
