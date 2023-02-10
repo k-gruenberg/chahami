@@ -8,8 +8,6 @@ use std::sync::{RwLock, Arc};
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use std::str::FromStr;
-use tempfile::NamedTempFile;
-use std::io::Write;
 use std::path::PathBuf;
 
 const MAX_NUMBER_OF_PEERS: usize = 10;
@@ -146,20 +144,36 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
     // Both QUIC client and QUIC server need the server's certificate (and key in case of the server):
     // Beware that this is only because of a requirement of the s2n_quic crate used,
     // it does not add much of security since the private key is hardcoded and publicly known!
-    let mut quic_server_temp_cert_file = NamedTempFile::new().expect("creating temp cert file failed");
-    let mut quic_server_temp_key_file = NamedTempFile::new().expect("creating temp key file failed");
-    write!(quic_server_temp_cert_file, include_str!("../quic_server_cert.pem")).expect("writing to temp cert file failed");
-    write!(quic_server_temp_key_file, include_str!("../quic_server_key.pem")).expect("writing to temp key file failed");
-    let quic_server_temp_cert_file_path: PathBuf = quic_server_temp_cert_file.path().to_path_buf();
-    let quic_server_temp_key_file_path: PathBuf = quic_server_temp_key_file.path().to_path_buf();
+    
+    let home_dir: PathBuf = dirs::home_dir().expect("could not get home directory");
+
+    let mut chahami_dir: PathBuf = home_dir;
+    chahami_dir.push(".chahami");
+    if !chahami_dir.exists() {
+        std::fs::create_dir(&chahami_dir).expect("could not create '.chahami' dir in home dir");
+    }
+
+    let mut quic_server_cert_file_path: PathBuf = chahami_dir.clone();
+    quic_server_cert_file_path.push("quic_server_cert.pem");
+    
+    let mut quic_server_key_file_path: PathBuf = chahami_dir.clone();
+    quic_server_key_file_path.push("quic_server_key.pem");
+    
+    if !quic_server_cert_file_path.exists() {
+        std::fs::write(&quic_server_cert_file_path, include_str!("../quic_server_cert.pem")).expect("writing to cert file failed");
+    }
+    
+    if !quic_server_key_file_path.exists() {
+        std::fs::write(&quic_server_key_file_path, include_str!("../quic_server_key.pem")).expect("writing to key file failed");
+    }
 
     for i in 0..MAX_NUMBER_OF_PEERS {
         if peer_ip_addresses[i].trim() != "" { // For each peer the user specified:
             let port_shared = port_shared.clone();
             let peer_ip_address = peer_ip_addresses[i].clone();
             let status_labels = status_labels.clone();
-            let quic_server_temp_cert_file_path_clone = quic_server_temp_cert_file_path.clone();
-            let quic_server_temp_key_file_path_clone = quic_server_temp_key_file_path.clone();
+            let quic_server_cert_file_path_clone = quic_server_cert_file_path.clone();
+            let quic_server_key_file_path_clone = quic_server_key_file_path.clone();
             let tokio_runtime_clone_1 = tokio_runtime.clone();
             let tokio_runtime_clone_2 = tokio_runtime.clone();
             let tokio_runtime_clone_3 = tokio_runtime.clone();
@@ -196,7 +210,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 
                         // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
                         let quic_client = match s2n_quic::Client::builder()
-                            .with_tls(quic_server_temp_cert_file_path_clone.as_path()).unwrap()
+                            .with_tls(quic_server_cert_file_path_clone.as_path()).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
                             .start() {
                                 Ok(quic_client) => quic_client,
@@ -249,7 +263,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
                         let mut quic_server = match s2n_quic::Server::builder()
-                            .with_tls((quic_server_temp_cert_file_path_clone.as_path(), quic_server_temp_key_file_path_clone.as_path())).unwrap()
+                            .with_tls((quic_server_cert_file_path_clone.as_path(), quic_server_key_file_path_clone.as_path())).unwrap()
                             .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
                             .start() {
                                 Ok(quic_server) => quic_server,
