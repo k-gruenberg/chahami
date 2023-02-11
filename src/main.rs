@@ -236,7 +236,16 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
             let tokio_runtime_clone_2 = tokio_runtime.clone();
             let tokio_runtime_clone_3 = tokio_runtime.clone();
             tokio_runtime_clone_1.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
+                let mut first_loop_iteration = true;
                 loop { // Looping to restart punching when the QUIC connection fails (initially or sometime later):
+                    
+                    if !first_loop_iteration { // In the first loop iteration there's no previous error to display or used port to wait for being freed:
+                        // Before punching again, wait a few seconds to allow the user to see and read the error message printed at the end of the loop:
+                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                        // Note: The sleep should also allow the operating system to free up the ports again because punching on them again.
+                        first_loop_iteration = false;
+                    }
+
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
@@ -341,9 +350,6 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 *status_labels[i].write().unwrap() = format!("Conn to QUIC server failed: {}", err);
                             }
                         }
-                        // Before punching again, wait a few seconds to allow the user to see and read the error message printed above:
-                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
-                        // Note: The sleep should also allow the operating system to free up the ports again because punching on them again.
                     } else { // We are a server peer: Build a s2n_quic::Server:
                         // (B) Open up TCP socket and (A) link to QUIC socket:
 
@@ -394,8 +400,6 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         } else {
                             *status_labels[i].write().unwrap() = format!("Accepting conn failed / timeout");
                         }
-                        // Before punching again, wait a few seconds to allow the user to see and read the error message printed above:
-                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
                     }
                 }
             });
