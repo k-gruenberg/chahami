@@ -421,6 +421,15 @@ async fn punch_hole(ip_addr: IpAddr, port: u16) -> Result<bool, tokio::io::Error
     let socket = UdpSocket::bind(("0.0.0.0", port)).await?;
     socket.connect((ip_addr, port)).await?;
 
+    // Wait for the socket to become readable:
+    // This is supposed to prevent infinite punching loops that may occur when
+    //   the socket.send() call below succeeds but the socket.recv() call
+    //   fails with an "address already in use".
+    // When I know that I can't punsh (because I cannot receive),
+    //   also don't send and make the other peer falsely believe that punching
+    //   worked.
+    socket.readable().await?;
+
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let punch_time = Duration::from_millis((((now.as_millis() as f64)/PUNCH_INTERVAL_IN_MILLIS).ceil() * PUNCH_INTERVAL_IN_MILLIS) as u64);
