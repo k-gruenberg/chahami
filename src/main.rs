@@ -330,10 +330,14 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                         //   global QUIC connection or the local TCP connection fails/is terminated:
                                         let receive_task = tokio_runtime_clone_2.spawn(async move {
                                             // Write everything to our TCP client that we receive via QUIC:
+                                            println!("writing test: client software writes to local TCP client");
+                                            tokio::io::copy(&mut "test: client software writes to local TCP client".as_ref(), &mut tcp_write_stream).await.unwrap();
                                             tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
                                         });
                                         let send_task = tokio_runtime_clone_3.spawn(async move {
                                             // Write everything to our QUIC server that we receive from our TCP client:
+                                            println!("writing test: client software writes to QUIC stream");
+                                            tokio::io::copy(&mut "test: client software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
                                             tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
                                         });
 
@@ -385,10 +389,14 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 //   global QUIC connection or the local TCP connection fails/is terminated:
                                 let receive_task = tokio_runtime_clone_2.spawn(async move {
                                     // Write everything to our TCP client that we receive via QUIC:
+                                    println!("writing test: server software writes to local TCP server");
+                                    tokio::io::copy(&mut "test: server software writes to local TCP server".as_ref(), &mut tcp_write_stream).await.unwrap();
                                     tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
                                 });
                                 let send_task = tokio_runtime_clone_3.spawn(async move {
                                     // Write everything to our QUIC server that we receive from our TCP client:
+                                    println!("writing test: server software writes to QUIC stream");
+                                    tokio::io::copy(&mut "test: server software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
                                     tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
                                 });
                                 *status_labels[i].write().unwrap() = format!("Connected");
