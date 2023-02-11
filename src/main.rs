@@ -372,7 +372,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         //       eternity for the client to connect when the client won't connect because punching on
                         //       their side hasn't succeeded:
                         if let Ok(Some(mut quic_connection)) = tokio::time::timeout(Duration::from_millis(QUIC_SERVER_ACCEPT_TIMEOUT), quic_server.accept()).await {
-                            let quic_stream = quic_connection.open_bidirectional_stream().await.unwrap();
+                            let quic_stream = quic_connection.accept_bidirectional_stream().await.unwrap().unwrap();
                             let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
 
                             // (B) localhost TCP client
