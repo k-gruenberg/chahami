@@ -23,7 +23,7 @@ const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time t
 
 fn main() {
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(320.0, 350.0)),
+        initial_window_size: Some(egui::vec2(320.0, 370.0)),
         ..Default::default()
     };
     eframe::run_native(
@@ -118,6 +118,12 @@ impl eframe::App for ChahamiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Chahami");
+
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let seconds = now % 60;
+            let minutes = (now / 60) % 60;
+            let hours = (now / 3600) % 24;
+            ui.label(format!("Your system time (UTC): {:02}:{:02}:{:02}", hours, minutes, seconds));
 
             ui.label(format!("Your global IP address: {}", &mut self.my_global_ip_address));
             
