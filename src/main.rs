@@ -236,29 +236,6 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
             let tokio_runtime_clone_2 = tokio_runtime.clone();
             let tokio_runtime_clone_3 = tokio_runtime.clone();
             tokio_runtime_clone_1.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
-                // Prepare UDP socket:
-                let local_addr = "0.0.0.0";
-                let local_port = CHAHAMI_PORT + (i as u16);
-                let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
-                let remote_port = CHAHAMI_PORT + (i as u16);
-                let udp_socket;
-                loop {
-                    match UdpSocket::bind((local_addr, local_port)).await {
-                        Ok(socket) => {
-                            udp_socket = socket;
-                            break;
-                        },
-                        Err(err) => {
-                             *status_labels[i].write().unwrap() = format!("Error binding UDP socket: {}", err);
-                            tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
-                        }
-                    }
-                }
-                while let Err(err) = udp_socket.connect((remote_addr, remote_port)).await {
-                    *status_labels[i].write().unwrap() = format!("Error connecting UDP socket: {}", err);
-                    tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
-                }
-
                 let mut first_loop_iteration = true;
                 loop { // Looping to restart punching when the QUIC connection fails (initially or sometime later):
                     
@@ -269,6 +246,30 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         first_loop_iteration = false;
                     }
 
+                    // Prepare UDP socket:
+                    let local_addr = "0.0.0.0";
+                    let local_port = CHAHAMI_PORT + (i as u16);
+                    let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
+                    let remote_port = CHAHAMI_PORT + (i as u16);
+                    let udp_socket;
+                    loop {
+                        match UdpSocket::bind((local_addr, local_port)).await {
+                            Ok(socket) => {
+                                udp_socket = socket;
+                                break;
+                            },
+                            Err(err) => {
+                                *status_labels[i].write().unwrap() = format!("Error binding UDP socket: {}", err);
+                                tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                            }
+                        }
+                    }
+                    while let Err(err) = udp_socket.connect((remote_addr, remote_port)).await {
+                        *status_labels[i].write().unwrap() = format!("Error connecting UDP socket: {}", err);
+                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                    }
+
+                    // Punching:
                     let mut counter = 0;
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
@@ -307,7 +308,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
                         let quic_client = match s2n_quic::Client::builder()
                             .with_tls(quic_server_cert_file_path_clone.as_path()).unwrap()
-                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
+                            .with_io(s2n_quic::provider::io::tokio::Builder::default().with_rx_socket(udp_socket.into_std().unwrap()).unwrap().build().unwrap()).unwrap()
                             .start() {
                                 Ok(quic_client) => quic_client,
                                 Err(err) => {
@@ -315,8 +316,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                     return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
                                 }
                             };
-                        let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT + (i as u16)).parse().unwrap();
-                        let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
+                        let connect = s2n_quic::client::Connect::new((remote_addr, remote_port)).with_server_name("chahami");
                         match quic_client.connect(connect).await {
                             Ok(mut quic_connection) => {
                                 quic_connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
@@ -385,7 +385,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
                         let mut quic_server = match s2n_quic::Server::builder()
                             .with_tls((quic_server_cert_file_path_clone.as_path(), quic_server_key_file_path_clone.as_path())).unwrap()
-                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
+                            .with_io(s2n_quic::provider::io::tokio::Builder::default().with_rx_socket(udp_socket.into_std().unwrap()).unwrap().build().unwrap()).unwrap()
                             .start() {
                                 Ok(quic_server) => quic_server,
                                 Err(err) => {
