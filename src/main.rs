@@ -15,7 +15,8 @@ const MAX_NUMBER_OF_PEERS: usize = 10; // ToDo: dynamically increase when all 10
 const CHAHAMI_PORT: u16 = 13130; // UDP ports CHAHAMI_PORT to CHAHAMI_PORT+MAX_NUMBER_OF_PEERS-1 will be used for communication
 const PUNCH_INTERVAL_IN_MILLIS: f64 = 5_000.0; // the punch time is every 5,000 milliseconds
 const PUNCH_TIMEOUT: u64 = 4_000; // after having punched, wait 4,000 milliseconds for a response until considering the punch as a failure
-const PUNCH_MESSAGE: &str = "PUNCH"; // the message sent when punching; completely irrelevant
+const PUNCH_MESSAGE_PREFIX: &str = "PUNCH"; // the prefix of the message sent when punching
+//const ACK_PUNCH_MESSAGE_PREFIX: &str = "ACKPUNCH"; // the prefix of the 2nd message sent when punching // ToDo: would make incorrectly assuming a punch to have been successful much less likely
 const QUIC_SERVER_SETUP_TIME_IN_MILLIS: u64 = 3_000; // the time that the QUIC client will wait until trying to connect to the QUIC server
 const QUIC_SERVER_ACCEPT_TIMEOUT: u64 = 10_000; // the time that the QUIC server will wait for an connection before timing out; has to be larger than QUIC_SERVER_SETUP_TIME_IN_MILLIS!
 const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time to display an error message to the user
@@ -452,9 +453,21 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 /// * This function then waits for a response packet for up to 4 seconds
 ///   (timeout).
 async fn punch_hole(socket: &UdpSocket) -> Result<bool, tokio::io::Error> {
+    // Clear up old punch messages/UDP datagrams from previous punches or punch attempts:
+    let mut buffer_for_irrelevant_old_data = [0; 64];
+    while let Ok(_) = socket.try_recv(&mut buffer_for_irrelevant_old_data) {
+        // (do nothing with the old messages, just read and discard them)
+    } // From the docs: "When there is no pending data, Err(io::ErrorKind::WouldBlock) is returned."
+
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let punch_time = Duration::from_millis((((now.as_millis() as f64)/PUNCH_INTERVAL_IN_MILLIS).ceil() * PUNCH_INTERVAL_IN_MILLIS) as u64);
+
+    // Calculate punch message; the one being sent *as well as* the one being expected from the other peer:
+    let punch_message = PUNCH_MESSAGE_PREFIX.to_string() + &punch_time.as_secs().to_string();
+    // Note: we are including the punch time in the punch message to ensure that a punch message coming from an older
+    //       non-successful punch attempt cannot interfere!
+    //       Otherwise this may lead to a lifelock and endless alternating punch attempts between two peers!
     
     // Wait until punch time:
     while SystemTime::now().duration_since(UNIX_EPOCH).unwrap() < punch_time {
@@ -467,7 +480,7 @@ async fn punch_hole(socket: &UdpSocket) -> Result<bool, tokio::io::Error> {
     //        [...] some platforms (specifically Windows) will provide timers with a larger resolution than 1 ms."
 
     // Punch:
-    socket.send(PUNCH_MESSAGE.as_ref()).await?;
+    socket.send(punch_message.as_ref()).await?;
 
     // On a synchronous std::net::UdpSocket we would now do the following before calling .recv():
     // socket.set_read_timeout(Some(Duration::from_millis(PUNCH_TIMEOUT))).expect("punching failed: set_read_timeout() failed");
@@ -477,8 +490,8 @@ async fn punch_hole(socket: &UdpSocket) -> Result<bool, tokio::io::Error> {
     let mut buf = [0; 64];
     if let Ok(Ok(number_of_bytes)) = tokio::time::timeout(Duration::from_millis(PUNCH_TIMEOUT), socket.recv(&mut buf)).await {
         let filled_buf = &mut buf[..number_of_bytes];
-        return Ok(String::from_utf8(filled_buf.to_vec()) == Ok(PUNCH_MESSAGE.to_owned()));
-        // returns true when the expected PUNCH_MESSAGE was received
+        return Ok(String::from_utf8(filled_buf.to_vec()) == Ok(punch_message));
+        // returns true when the expected punch message (with the correct timestamp) was received
     } else {
         return Ok(false); // no response after timeout: punch failed (this time)
     }
