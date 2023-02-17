@@ -236,6 +236,29 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
             let tokio_runtime_clone_2 = tokio_runtime.clone();
             let tokio_runtime_clone_3 = tokio_runtime.clone();
             tokio_runtime_clone_1.spawn(async move { // Note: punching will be performed concurrently, which has both its upsides and its downsides...
+                // Prepare UDP socket:
+                let local_addr = "0.0.0.0";
+                let local_port = CHAHAMI_PORT + (i as u16);
+                let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
+                let remote_port = CHAHAMI_PORT + (i as u16);
+                let udp_socket;
+                loop {
+                    match UdpSocket::bind((local_addr, local_port)).await {
+                        Ok(socket) => {
+                            udp_socket = socket;
+                            break;
+                        },
+                        Err(err) => {
+                             *status_labels[i].write().unwrap() = format!("Error binding UDP socket: {}", err);
+                            tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                        }
+                    }
+                }
+                while let Err(err) = udp_socket.connect((remote_addr, remote_port)).await {
+                    *status_labels[i].write().unwrap() = format!("Error connecting UDP socket: {}", err);
+                    tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                }
+
                 let mut first_loop_iteration = true;
                 loop { // Looping to restart punching when the QUIC connection fails (initially or sometime later):
                     
@@ -250,7 +273,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     *status_labels[i].write().unwrap() = format!("Punching...");
                     // Try punching (and punching (and punching ...)):
                     loop {
-                        match punch_hole(IpAddr::from_str(&peer_ip_address).unwrap(), CHAHAMI_PORT + (i as u16)).await {
+                        match punch_hole(&udp_socket).await {
                             Ok(false) => { // UDP hole punching failed:
                                 counter += 1;
                                 *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
@@ -415,8 +438,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
     }
 }
 
-/// Tries to punch a hole using UDP hole punching to the specified address
-/// (IP address + port).
+/// Tries to punch a hole using UDP hole punching to the address behind the
+/// specified UDP socket.
 /// Returns true when the punch appears to have been successful from our side.
 /// Returns false when no packet was received, i.e., when the punch appears to
 /// have been unsuccessful; in that case, simply try again.
@@ -428,11 +451,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 ///   or xx:xx:55 exactly.
 /// * This function then waits for a response packet for up to 4 seconds
 ///   (timeout).
-async fn punch_hole(ip_addr: IpAddr, port: u16) -> Result<bool, tokio::io::Error> {
-    // Prepare UDP socket:
-    let socket = UdpSocket::bind(("0.0.0.0", port)).await?;
-    socket.connect((ip_addr, port)).await?;
-
+async fn punch_hole(socket: &UdpSocket) -> Result<bool, tokio::io::Error> {
     // Calculate punch time:
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let punch_time = Duration::from_millis((((now.as_millis() as f64)/PUNCH_INTERVAL_IN_MILLIS).ceil() * PUNCH_INTERVAL_IN_MILLIS) as u64);
