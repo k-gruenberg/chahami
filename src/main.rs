@@ -250,8 +250,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // Before punching again, wait a few seconds to allow the user to see and read the error message printed at the end of the loop:
                         tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
                         // Note: The sleep should also allow the operating system to free up the ports again because punching on them again.
-                        first_loop_iteration = false;
                     }
+                    first_loop_iteration = false;
 
                     // Prepare UDP socket:
                     let local_addr = "0.0.0.0";
