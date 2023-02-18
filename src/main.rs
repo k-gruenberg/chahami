@@ -18,6 +18,7 @@ const PUNCH_TIMEOUT: u64 = 4_000; // after having punched, wait 4,000 millisecon
 const PUNCH_MESSAGE_PREFIX: &str = "PUNCH"; // the prefix of the message sent when punching
 //const ACK_PUNCH_MESSAGE_PREFIX: &str = "ACKPUNCH"; // the prefix of the 2nd message sent when punching // ToDo: would make incorrectly assuming a punch to have been successful much less likely
 const QUIC_SERVER_SETUP_TIME_IN_MILLIS: u64 = 3_000; // the time that the QUIC client will wait until trying to connect to the QUIC server
+const QUIC_CLIENT_CONNECT_TIMEOUT: u64 = 10_000; // the time that the QUIC client will wait for the connection to succeed before timing out and re-punshing
 const QUIC_SERVER_ACCEPT_TIMEOUT: u64 = 10_000; // the time that the QUIC server will wait for an connection before timing out; has to be larger than QUIC_SERVER_SETUP_TIME_IN_MILLIS!
 const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time to display an error message to the user
 
@@ -315,9 +316,17 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
 
                         // (A) QUIC client (cf. https://github.com/quinn-rs/quinn/blob/main/quinn/examples/client.rs):
                         let mut roots = rustls::RootCertStore::empty();
-                        match std::fs::read(quic_server_cert_file_path_clone.clone()) {
-                            Ok(cert) => {
-                                roots.add(&rustls::Certificate(cert)).unwrap();
+                        match pem_file_to_rustls_certificates(&quic_server_cert_file_path_clone.clone()) {
+                            Ok(certs) if certs.len() >= 1 => {
+                                roots.add(&certs.last().unwrap()).unwrap();
+                                // cf. https://serverfault.com/questions/476576/how-to-combine-various-certificates-into-single-pem
+                                // or more specifically https://www.rfc-editor.org/rfc/rfc4346#section-7.4.2:
+                                //   "The sender's certificate must come first in the list.
+                                //    Each following certificate must directly certify the one preceding it."
+                            }
+                            Ok(_certs) => {
+                                *status_labels[i].write().unwrap() = format!("Fatal: QUIC server cert file contains no certs");
+                                return;
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
                                 *status_labels[i].write().unwrap() = format!("Fatal: QUIC server certificate file not found");
@@ -337,8 +346,9 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             Ok(mut quic_client_endpoint) => {
                                 quic_client_endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
 
-                                match quic_client_endpoint.connect((remote_addr, remote_port).into(), "chahami").unwrap().await { // "chahami" = hostname
-                                    Ok(conn) => {
+                                *status_labels[i].write().unwrap() = format!("Connecting to QUIC server...");
+                                match tokio::time::timeout(Duration::from_millis(QUIC_CLIENT_CONNECT_TIMEOUT), quic_client_endpoint.connect((remote_addr, remote_port).into(), "chahami").unwrap()).await { // "chahami" = hostname
+                                    Ok(Ok(conn)) => {
                                         *status_labels[i].write().unwrap() = format!("Connected to QUIC server");
                                         match conn.open_bi().await {
                                             Ok((mut quic_send_stream, mut quic_receive_stream)) => {
@@ -401,8 +411,11 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                             }
                                         }
                                     },
-                                    Err(err) => {
-                                        *status_labels[i].write().unwrap() = format!("Failed to connect to QUIC server: {}", err);
+                                    Err(timeout_err) => {
+                                        *status_labels[i].write().unwrap() = format!("Failed to connect to QUIC server due to timeout: {}", timeout_err);
+                                    },
+                                    Ok(Err(connect_err)) => {
+                                        *status_labels[i].write().unwrap() = format!("Failed to connect to QUIC server: {}", connect_err);
                                     }
                                 }
                             },
@@ -416,7 +429,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         let localhost_port_shared: u16 = port_shared.parse().expect("invalid port number");
 
                         // (A) QUIC server (cf. https://github.com/quinn-rs/quinn/blob/main/quinn/examples/server.rs):
-                        let (cert, key) = match (std::fs::read(quic_server_cert_file_path_clone.clone()), std::fs::read(quic_server_key_file_path_clone.clone())) {
+                        let (cert_chain, key) = match (pem_file_to_rustls_certificates(&quic_server_cert_file_path_clone.clone()), pem_file_to_rustls_private_key(&quic_server_key_file_path_clone.clone())) {
                             (Ok(x), Ok(y)) => (x, y),
                             (Err(e1), Ok(_)) => {
                                 *status_labels[i].write().unwrap() = format!("Fatal: Failed to read QUIC server cert file: {}", e1);
@@ -432,11 +445,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             },
                         };
 
-                        let cert = rustls::Certificate(cert);
-                        let key = rustls::PrivateKey(key);
-
                         let server_crypto;
-                        match rustls::ServerConfig::builder().with_safe_defaults().with_no_client_auth().with_single_cert(vec![cert], key) {
+                        match rustls::ServerConfig::builder().with_safe_defaults().with_no_client_auth().with_single_cert(cert_chain, key) {
                             Ok(crypto) => {
                                 server_crypto = crypto;
                             },
@@ -518,6 +528,49 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
             });
         } 
     }
+}
+
+fn pem_file_to_rustls_certificates(cert_path: &std::path::Path) -> Result<Vec<rustls::Certificate>, std::io::Error> {
+    //return Ok(rustls::Certificate(std::fs::read(path)?)); // This is right for .der files but wrong for .pem files!
+
+    // Copied from https://github.com/quinn-rs/quinn/blob/main/quinn/examples/server.rs:
+    let cert_chain = std::fs::read(cert_path)?; // failed to read certificate chain
+    let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
+        vec![rustls::Certificate(cert_chain)]
+    } else {
+        rustls_pemfile::certs(&mut &*cert_chain)? // invalid PEM-encoded certificate
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect()
+    };
+
+    return Ok(cert_chain);
+}
+
+fn pem_file_to_rustls_private_key(key_path: &std::path::Path) -> Result<rustls::PrivateKey, std::io::Error> {
+    //return Ok(rustls::PrivateKey(std::fs::read(path)?)); // This is right for .der files but wrong for .pem files!
+
+    // Copied from https://github.com/quinn-rs/quinn/blob/main/quinn/examples/server.rs:
+    let key = std::fs::read(key_path)?; // failed to read private key
+    let key = if key_path.extension().map_or(false, |x| x == "der") {
+        rustls::PrivateKey(key)
+    } else {
+        let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)?; // malformed PKCS #8 private key
+        match pkcs8.into_iter().next() {
+            Some(x) => rustls::PrivateKey(x),
+            None => {
+                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)?; // malformed PKCS #1 private key
+                match rsa.into_iter().next() {
+                    Some(x) => rustls::PrivateKey(x),
+                    None => {
+                        return Err(std::io::Error::new(std::io::ErrorKind::Other, "no private keys found"));
+                    }
+                }
+            }
+        }
+    };
+
+    return Ok(key);
 }
 
 /// Tries to punch a hole using UDP hole punching to the address behind the
