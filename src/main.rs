@@ -405,38 +405,44 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // Note: We need to put a timeout() around accept() because otherwise we would wait for an
                         //       eternity for the client to connect when the client won't connect because punching on
                         //       their side hasn't succeeded:
-                        if let Ok(Some(mut quic_connection)) = tokio::time::timeout(Duration::from_millis(QUIC_SERVER_ACCEPT_TIMEOUT), quic_server.accept()).await {
-                            let quic_stream = quic_connection.accept_bidirectional_stream().await.unwrap().unwrap();
-                            let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
+                        match tokio::time::timeout(Duration::from_millis(QUIC_SERVER_ACCEPT_TIMEOUT), quic_server.accept()).await {
+                            Ok(Some(mut quic_connection)) => {
+                                let quic_stream = quic_connection.accept_bidirectional_stream().await.unwrap().unwrap();
+                                let (mut quic_receive_stream, mut quic_send_stream) = quic_stream.split();
 
-                            // (B) localhost TCP client
-                            //     (simulating the external client and connecting to the localhost server being exposed):
-                            if let Ok(tcp_stream) = TcpStream::connect(("127.0.0.1", localhost_port_shared)).await {
-                                let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
+                                // (B) localhost TCP client
+                                //     (simulating the external client and connecting to the localhost server being exposed):
+                                if let Ok(tcp_stream) = TcpStream::connect(("127.0.0.1", localhost_port_shared)).await {
+                                    let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
 
-                                // Link (A) and (B) together using two new tasks
-                                //   and join the two in order to continue the loop and start re-punching when either the
-                                //   global QUIC connection or the local TCP connection fails/is terminated:
-                                let receive_task = tokio_runtime_clone_2.spawn(async move {
-                                    // Write everything to our TCP client that we receive via QUIC:
-                                    println!("writing test: server software writes to local TCP server");
-                                    tokio::io::copy(&mut "test: server software writes to local TCP server".as_ref(), &mut tcp_write_stream).await.unwrap();
-                                    tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
-                                });
-                                let send_task = tokio_runtime_clone_3.spawn(async move {
-                                    // Write everything to our QUIC server that we receive from our TCP client:
-                                    println!("writing test: server software writes to QUIC stream");
-                                    tokio::io::copy(&mut "test: server software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
-                                    tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
-                                });
-                                *status_labels[i].write().unwrap() = format!("Connected");
-                                let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again...
-                                *status_labels[i].write().unwrap() = format!("Connection lost");
-                            } else {
-                                *status_labels[i].write().unwrap() = format!("Conn to 127.0.0.1:{} failed", localhost_port_shared);
+                                    // Link (A) and (B) together using two new tasks
+                                    //   and join the two in order to continue the loop and start re-punching when either the
+                                    //   global QUIC connection or the local TCP connection fails/is terminated:
+                                    let receive_task = tokio_runtime_clone_2.spawn(async move {
+                                        // Write everything to our TCP client that we receive via QUIC:
+                                        println!("writing test: server software writes to local TCP server");
+                                        tokio::io::copy(&mut "test: server software writes to local TCP server".as_ref(), &mut tcp_write_stream).await.unwrap();
+                                        tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
+                                    });
+                                    let send_task = tokio_runtime_clone_3.spawn(async move {
+                                        // Write everything to our QUIC server that we receive from our TCP client:
+                                        println!("writing test: server software writes to QUIC stream");
+                                        tokio::io::copy(&mut "test: server software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
+                                        tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
+                                    });
+                                    *status_labels[i].write().unwrap() = format!("Connected");
+                                    let _ = tokio::join!(send_task, receive_task); // When both fail/terminate, the punching process will be started again...
+                                    *status_labels[i].write().unwrap() = format!("Connection lost");
+                                } else {
+                                    *status_labels[i].write().unwrap() = format!("Conn to 127.0.0.1:{} failed", localhost_port_shared);
+                                }
+                            },
+                            Ok(None) => {
+                                *status_labels[i].write().unwrap() = format!("Accepting conn failed");
+                            },
+                            Err(err) => {
+                                *status_labels[i].write().unwrap() = format!("Accepting conn failed due to timeout: {}", err);
                             }
-                        } else {
-                            *status_labels[i].write().unwrap() = format!("Accepting conn failed / timeout");
                         }
                     }
                 }
