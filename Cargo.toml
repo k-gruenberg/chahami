@@ -11,7 +11,7 @@ license-file = "LICENSE"
 [dependencies]
 eframe = "0.20.1" # https://crates.io/crates/eframe # MIT OR Apache-2.0
 reqwest = { version = "0.11", features = ["blocking", "json"] } # https://crates.io/crates/reqwest # MIT OR Apache-2.0
-s2n-quic = "1.15.0" # Apache-2.0
+s2n-quic = "1.16.0" # Apache-2.0
 tokio = "1.25.0" # MIT
 dirs = "4.0.0" # MIT OR Apache-2.0
 serde = { version = "1.0", features = ["derive"] } # MIT OR Apache-2.0

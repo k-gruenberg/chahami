@@ -310,6 +310,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // (B) Open up TCP socket and (A) link to QUIC socket:
 
                         // Wait a little before starting the QUIC client such that the other peer may start its QUIC server:
+                        *status_labels[i].write().unwrap() = format!("Waiting before connecting to QUIC server...");
                         tokio::time::sleep(Duration::from_millis(QUIC_SERVER_SETUP_TIME_IN_MILLIS)).await;
 
                         // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
@@ -324,6 +325,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 }
                             };
                         let connect = s2n_quic::client::Connect::new((remote_addr, remote_port)).with_server_name("chahami");
+                        *status_labels[i].write().unwrap() = format!("Connecting to QUIC server...");
                         match quic_client.connect(connect).await {
                             Ok(mut quic_connection) => {
                                 quic_connection.keep_alive(true).unwrap(); // Ensure the connection doesn't time out with inactivity
@@ -401,7 +403,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 }
                             };
                         // Wait for other peer (QUIC client) to connect:
-                        *status_labels[i].write().unwrap() = format!("Waiting for other to connect");
+                        *status_labels[i].write().unwrap() = format!("Waiting for other to connect...");
                         // Note: We need to put a timeout() around accept() because otherwise we would wait for an
                         //       eternity for the client to connect when the client won't connect because punching on
                         //       their side hasn't succeeded:
