@@ -27,7 +27,7 @@ fn main() {
         ..Default::default()
     };
     eframe::run_native(
-        "Chahami",
+        &format!("Chahami v{}", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(|_cc| Box::new(ChahamiApp::default())),
     );
