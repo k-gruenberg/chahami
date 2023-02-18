@@ -253,53 +253,55 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     }
                     first_loop_iteration = false;
 
-                    // Prepare UDP socket:
-                    let local_addr = "0.0.0.0";
-                    let local_port = CHAHAMI_PORT + (i as u16);
-                    let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
-                    let remote_port = CHAHAMI_PORT + (i as u16);
-                    let udp_socket;
-                    loop {
-                        match UdpSocket::bind((local_addr, local_port)).await {
-                            Ok(socket) => {
-                                udp_socket = socket;
-                                break;
-                            },
-                            Err(err) => {
-                                *status_labels[i].write().unwrap() = format!("Error binding UDP socket: {}", err);
-                                tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                    {
+                        // Prepare UDP socket for punching:
+                        let local_addr = "0.0.0.0";
+                        let local_port = CHAHAMI_PORT + (i as u16);
+                        let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
+                        let remote_port = CHAHAMI_PORT + (i as u16);
+                        let udp_socket;
+                        loop {
+                            match UdpSocket::bind((local_addr, local_port)).await {
+                                Ok(socket) => {
+                                    udp_socket = socket;
+                                    break;
+                                },
+                                Err(err) => {
+                                    *status_labels[i].write().unwrap() = format!("Error binding UDP socket: {}", err);
+                                    tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                                }
                             }
                         }
-                    }
-                    while let Err(err) = udp_socket.connect((remote_addr, remote_port)).await {
-                        *status_labels[i].write().unwrap() = format!("Error connecting UDP socket: {}", err);
-                        tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
-                    }
+                        while let Err(err) = udp_socket.connect((remote_addr, remote_port)).await {
+                            *status_labels[i].write().unwrap() = format!("Error connecting UDP socket: {}", err);
+                            tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                        }
 
-                    // Punching:
-                    let mut counter = 0;
-                    *status_labels[i].write().unwrap() = format!("Punching...");
-                    // Try punching (and punching (and punching ...)):
-                    loop {
-                        match punch_hole(&udp_socket).await {
-                            Ok(false) => { // UDP hole punching failed:
-                                counter += 1;
-                                *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
-                                // continue (innermost) loop and try again... (and again and again and again...)
-                            },
-                            Ok(true) => { // UDP hole punching succeeded:
-                                *status_labels[i].write().unwrap() = format!("Punching succeeded");
-                                break; // break out of (innermost) loop to stop punching
-                            },
-                            Err(err) => { // UDP hole punching could not be performed at all due to a tokio::io::Error (e.g. an "address already in use" error):
-                                *status_labels[i].write().unwrap() = format!("Couldn't punch: {}", err);
+                        // Punching:
+                        let mut counter = 0;
+                        *status_labels[i].write().unwrap() = format!("Punching...");
+                        // Try punching (and punching (and punching ...)):
+                        loop {
+                            match punch_hole(&udp_socket).await {
+                                Ok(false) => { // UDP hole punching failed:
+                                    counter += 1;
+                                    *status_labels[i].write().unwrap() = format!("Punching failed {} times", counter);
+                                    // continue (innermost) loop and try again... (and again and again and again...)
+                                },
+                                Ok(true) => { // UDP hole punching succeeded:
+                                    *status_labels[i].write().unwrap() = format!("Punching succeeded");
+                                    break; // break out of (innermost) loop to stop punching
+                                },
+                                Err(err) => { // UDP hole punching could not be performed at all due to a tokio::io::Error (e.g. an "address already in use" error):
+                                    *status_labels[i].write().unwrap() = format!("Couldn't punch: {}", err);
 
-                                // Wait a few seconds to allow the user to see and read the error message printed above:
-                                // Also: when puch_hole() failed with an error (e.g. "address already in use"),
-                                //       there's really no point point in *immediately* trying to call it again!
-                                tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
+                                    // Wait a few seconds to allow the user to see and read the error message printed above:
+                                    // Also: when puch_hole() failed with an error (e.g. "address already in use"),
+                                    //       there's really no point point in *immediately* trying to call it again!
+                                    tokio::time::sleep(Duration::from_millis(ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS)).await;
 
-                                // continue (innermost) loop and try again... (and again and again and again...)
+                                    // continue (innermost) loop and try again... (and again and again and again...)
+                                }
                             }
                         }
                     }
@@ -316,7 +318,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // (A) QUIC client (code taken from example on https://crates.io/crates/s2n-quic):
                         let quic_client = match s2n_quic::Client::builder()
                             .with_tls(quic_server_cert_file_path_clone.as_path()).unwrap()
-                            .with_io(s2n_quic::provider::io::tokio::Builder::default().with_rx_socket(udp_socket.into_std().unwrap()).unwrap().build().unwrap()).unwrap()
+                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
                             .start() {
                                 Ok(quic_client) => quic_client,
                                 Err(err) => {
@@ -324,7 +326,8 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                     return; // return from the whole async block to stop handling this peer entirely; do *NOT* continue to try punching
                                 }
                             };
-                        let connect = s2n_quic::client::Connect::new((remote_addr, remote_port)).with_server_name("chahami");
+                        let addr: SocketAddr = format!("{}:{}", peer_ip_address, CHAHAMI_PORT + (i as u16)).parse().unwrap();
+                        let connect = s2n_quic::client::Connect::new(addr).with_server_name("chahami");
                         *status_labels[i].write().unwrap() = format!("Connecting to QUIC server...");
                         match quic_client.connect(connect).await {
                             Ok(mut quic_connection) => {
@@ -394,7 +397,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         // (A) QUIC server (code taken from example on https://crates.io/crates/s2n-quic):
                         let mut quic_server = match s2n_quic::Server::builder()
                             .with_tls((quic_server_cert_file_path_clone.as_path(), quic_server_key_file_path_clone.as_path())).unwrap()
-                            .with_io(s2n_quic::provider::io::tokio::Builder::default().with_rx_socket(udp_socket.into_std().unwrap()).unwrap().build().unwrap()).unwrap()
+                            .with_io(("0.0.0.0", CHAHAMI_PORT + (i as u16))).unwrap()
                             .start() {
                                 Ok(quic_server) => quic_server,
                                 Err(err) => {
