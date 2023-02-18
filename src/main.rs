@@ -470,6 +470,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                 //       their side hasn't succeeded:
                                 match tokio::time::timeout(Duration::from_millis(QUIC_SERVER_ACCEPT_TIMEOUT), quic_server_endpoint.accept()).await {
                                     Ok(Some(quic_connecting)) => {
+                                        *status_labels[i].write().unwrap() = format!("Other is connecting...");
                                         match quic_connecting.await {
                                             Ok(quic_connection) => {
                                                 match quic_connection.accept_bi().await {
