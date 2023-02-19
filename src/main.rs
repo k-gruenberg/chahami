@@ -126,7 +126,7 @@ impl eframe::App for ChahamiApp {
             let seconds = now % 60;
             let minutes = (now / 60) % 60;
             let hours = (now / 3600) % 24;
-            ui.label(format!("Your system time (UTC): {:02}:{:02}:{:02}", hours, minutes, seconds));
+            ui.label(format!("Your system time (UTC): {:02}:{:02}:{:02}", hours, minutes, seconds)); // ToDo: verify correctness of system time using NTP server
 
             ui.label(format!("Your global IP address: {}", &mut self.my_global_ip_address));
             
