@@ -254,7 +254,7 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                     }
                     first_loop_iteration = false;
 
-                    // Prepare UDP socket (will be used for punching and then for the QUIC connection):
+                    // Prepare UDP socket:
                     let remote_addr = IpAddr::from_str(&peer_ip_address).unwrap();
                     let remote_port = CHAHAMI_PORT + (i as u16);
                     let local_addr = if remote_addr.is_ipv4() {"0.0.0.0"} else {"::"}; // choose ipv6 wildcard address when remote_addr is an ipv6 address !!!!!
@@ -342,9 +342,9 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             .with_root_certificates(roots)
                             .with_no_client_auth();
 
-                        let blocking_std_udp_socket = udp_socket.into_std().unwrap();
-                        blocking_std_udp_socket.set_nonblocking(false).unwrap();
-                        match quinn::Endpoint::new(Default::default(), None, blocking_std_udp_socket, quinn::TokioRuntime {}) {
+                        let udp_socket_local_addr = udp_socket.local_addr().unwrap();
+                        std::mem::drop(udp_socket);
+                        match quinn::Endpoint::client(udp_socket_local_addr) {
                             Ok(mut quic_client_endpoint) => {
                                 quic_client_endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
 
@@ -463,9 +463,9 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             .unwrap()
                             .max_concurrent_uni_streams(0_u8.into());
 
-                        let blocking_std_udp_socket = udp_socket.into_std().unwrap();
-                        blocking_std_udp_socket.set_nonblocking(false).unwrap();
-                        match quinn::Endpoint::new(Default::default(), Some(server_config), blocking_std_udp_socket, quinn::TokioRuntime {}) {
+                        let udp_socket_local_addr = udp_socket.local_addr().unwrap();
+                        std::mem::drop(udp_socket);
+                        match quinn::Endpoint::server(server_config, udp_socket_local_addr) {
                             Ok(quic_server_endpoint) => {
                                 // Wait for other peer (QUIC client) to connect:
                                 *status_labels[i].write().unwrap() = format!("Waiting for other to connect...");
