@@ -1,6 +1,6 @@
 [package]
 name = "chahami"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 
 authors = ["Kendrick Gruenberg <k.gruenberg@tu-bs.de>"]
@@ -12,7 +12,7 @@ license-file = "LICENSE"
 eframe = "0.20.1" # https://crates.io/crates/eframe # MIT OR Apache-2.0
 reqwest = { version = "0.11", features = ["blocking", "json"] } # https://crates.io/crates/reqwest # MIT OR Apache-2.0
 quinn = { version = "0.9.3", features = ["runtime-tokio"] } # MIT OR Apache-2.0; see https://github.com/quinn-rs/quinn/tree/main/quinn/examples for example code
-rustls = "0.20.8" # Apache-2.0 OR ISC/MIT
+rustls = { version = "0.20.8", features = ["dangerous_configuration"] } # Apache-2.0 OR ISC/MIT
 rustls-pemfile = "1.0.0" # Apache-2.0 OR ISC OR MIT # Using the same version as in https://github.com/quinn-rs/quinn/blob/main/quinn/Cargo.toml
 tokio = { version = "1.25.0", features = ["macros"] } # MIT
 dirs = "4.0.0" # MIT OR Apache-2.0
