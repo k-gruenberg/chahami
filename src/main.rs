@@ -342,7 +342,9 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             .with_root_certificates(roots)
                             .with_no_client_auth();
 
-                        match quinn::Endpoint::new(Default::default(), None, udp_socket.into_std().unwrap(), quinn::TokioRuntime {}) {
+                        let blocking_std_udp_socket = udp_socket.into_std().unwrap();
+                        blocking_std_udp_socket.set_nonblocking(false).unwrap();
+                        match quinn::Endpoint::new(Default::default(), None, blocking_std_udp_socket, quinn::TokioRuntime {}) {
                             Ok(mut quic_client_endpoint) => {
                                 quic_client_endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
 
@@ -461,7 +463,9 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                             .unwrap()
                             .max_concurrent_uni_streams(0_u8.into());
 
-                        match quinn::Endpoint::new(Default::default(), Some(server_config), udp_socket.into_std().unwrap(), quinn::TokioRuntime {}) {
+                        let blocking_std_udp_socket = udp_socket.into_std().unwrap();
+                        blocking_std_udp_socket.set_nonblocking(false).unwrap();
+                        match quinn::Endpoint::new(Default::default(), Some(server_config), blocking_std_udp_socket, quinn::TokioRuntime {}) {
                             Ok(quic_server_endpoint) => {
                                 // Wait for other peer (QUIC client) to connect:
                                 *status_labels[i].write().unwrap() = format!("Waiting for other to connect...");
