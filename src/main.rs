@@ -21,6 +21,7 @@ const QUIC_SERVER_SETUP_TIME_IN_MILLIS: u64 = 3_000; // the time that the QUIC c
 const QUIC_CLIENT_CONNECT_TIMEOUT: u64 = 10_000; // the time that the QUIC client will wait for the connection to succeed before timing out and re-punshing
 const QUIC_SERVER_ACCEPT_TIMEOUT: u64 = 10_000; // the time that the QUIC server will wait for an connection before timing out; has to be larger than QUIC_SERVER_SETUP_TIME_IN_MILLIS!
 const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time to display an error message to the user
+const NO_SERVER_CERTIFICATE_VERIFICATION: bool = true; // when true, the QUIC client will not verify the QUIC server's certificate; when false, the platform's native roots will be trusted // ToDo: checkbox in (advanced) UI
 
 fn main() {
     let options = eframe::NativeOptions {
@@ -315,38 +316,21 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         tokio::time::sleep(Duration::from_millis(QUIC_SERVER_SETUP_TIME_IN_MILLIS)).await;
 
                         // (A) QUIC client (cf. https://github.com/quinn-rs/quinn/blob/main/quinn/examples/client.rs):
-                        let mut roots = rustls::RootCertStore::empty();
-                        match pem_file_to_rustls_certificates(&quic_server_cert_file_path_clone.clone()) {
-                            Ok(certs) if certs.len() >= 1 => {
-                                roots.add(&certs.last().unwrap()).unwrap();
-                                // cf. https://serverfault.com/questions/476576/how-to-combine-various-certificates-into-single-pem
-                                // or more specifically https://www.rfc-editor.org/rfc/rfc4346#section-7.4.2:
-                                //   "The sender's certificate must come first in the list.
-                                //    Each following certificate must directly certify the one preceding it."
-                            }
-                            Ok(_certs) => {
-                                *status_labels[i].write().unwrap() = format!("Fatal: QUIC server cert file contains no certs");
-                                return;
-                            }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
-                                *status_labels[i].write().unwrap() = format!("Fatal: QUIC server certificate file not found");
-                                return;
-                            }
-                            Err(e) => {
-                                *status_labels[i].write().unwrap() = format!("Fatal: Failed to open QUIC server certificate file: {}", e);
-                                return;
-                            }
-                        }
-                        let client_crypto = rustls::ClientConfig::builder()
-                            .with_safe_defaults()
-                            .with_root_certificates(roots)
-                            .with_no_client_auth();
+                        let client_config = if NO_SERVER_CERTIFICATE_VERIFICATION {
+                            let client_crypto = rustls::ClientConfig::builder()
+                                .with_safe_defaults()
+                                .with_custom_certificate_verifier(SkipServerVerification::new())
+                                .with_no_client_auth();
+                            quinn::ClientConfig::new(Arc::new(client_crypto))
+                        } else {
+                            quinn::ClientConfig::with_native_roots() // cf. https://quinn-rs.github.io/quinn/quinn/certificate.html
+                        };
 
                         let udp_socket_local_addr = udp_socket.local_addr().unwrap();
                         std::mem::drop(udp_socket);
                         match quinn::Endpoint::client(udp_socket_local_addr) {
                             Ok(mut quic_client_endpoint) => {
-                                quic_client_endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+                                quic_client_endpoint.set_default_client_config(client_config);
 
                                 *status_labels[i].write().unwrap() = format!("Connecting to QUIC server...");
                                 match tokio::time::timeout(Duration::from_millis(QUIC_CLIENT_CONNECT_TIMEOUT), quic_client_endpoint.connect((remote_addr, remote_port).into(), "chahami").unwrap()).await { // "chahami" = hostname
@@ -576,6 +560,29 @@ fn pem_file_to_rustls_private_key(key_path: &std::path::Path) -> Result<rustls::
     };
 
     return Ok(key);
+}
+
+/// Copied from https://github.com/quinn-rs/quinn/blob/main/quinn/examples/insecure_connection.rs:
+/// quote: "Dummy certificate verifier that treats any certificate as valid.
+///         NOTE, such verification is vulnerable to MITM attacks, but convenient for testing."
+struct SkipServerVerification;
+impl SkipServerVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+impl rustls::client::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _server_name: &rustls::ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
+    }
 }
 
 /// Tries to punch a hole using UDP hole punching to the address behind the
