@@ -22,6 +22,7 @@ const QUIC_CLIENT_CONNECT_TIMEOUT: u64 = 10_000; // the time that the QUIC clien
 const QUIC_SERVER_ACCEPT_TIMEOUT: u64 = 10_000; // the time that the QUIC server will wait for an connection before timing out; has to be larger than QUIC_SERVER_SETUP_TIME_IN_MILLIS!
 const ERROR_MESSAGE_DISPLAY_TIME_IN_MILLIS: u64 = 3_000; // the amount of time to display an error message to the user
 const NO_SERVER_CERTIFICATE_VERIFICATION: bool = true; // when true, the QUIC client will not verify the QUIC server's certificate; when false, the platform's native roots will be trusted // ToDo: checkbox in (advanced) UI
+const KEEP_ALIVE_INTERVAL_IN_MILLIS: u64 = 2_000; // Important: otherwise connecting won't work unless the client user establishes their local TCP connection very quickly!
 
 fn main() {
     let options = eframe::NativeOptions {
@@ -368,14 +369,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                                         //   global QUIC connection or the local TCP connection fails/is terminated:
                                                         let receive_task = tokio_runtime_clone_2.spawn(async move {
                                                             // Write everything to our TCP client that we receive via QUIC:
-                                                            println!("writing test: client software writes to local TCP client");
-                                                            tokio::io::copy(&mut "test: client software writes to local TCP client".as_ref(), &mut tcp_write_stream).await.unwrap();
                                                             tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
                                                         });
                                                         let send_task = tokio_runtime_clone_3.spawn(async move {
                                                             // Write everything to our QUIC server that we receive from our TCP client:
-                                                            println!("writing test: client software writes to QUIC stream");
-                                                            tokio::io::copy(&mut "test: client software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
                                                             tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
                                                         });
 
@@ -446,6 +443,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                         Arc::get_mut(&mut server_config.transport)
                             .unwrap()
                             .max_concurrent_uni_streams(0_u8.into());
+                        Arc::get_mut(&mut server_config.transport)
+                            .unwrap()
+                            .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_INTERVAL_IN_MILLIS)));
+                            // Important: otherwise connecting won't work unless the client user establishes their local TCP connection very quickly!
 
                         let udp_socket_local_addr = udp_socket.local_addr().unwrap();
                         std::mem::drop(udp_socket);
@@ -461,8 +462,11 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                         *status_labels[i].write().unwrap() = format!("Other is connecting...");
                                         match quic_connecting.await {
                                             Ok(quic_connection) => {
+                                                *status_labels[i].write().unwrap() = format!("Other connected, accepting bi stream...");
                                                 match quic_connection.accept_bi().await {
                                                     Ok((mut quic_send_stream, mut quic_receive_stream)) => {
+                                                        *status_labels[i].write().unwrap() = format!("Other connected, bi stream accepted.");
+
                                                         // (B) localhost TCP client
                                                         //     (simulating the external client and connecting to the localhost server being exposed):
                                                         if let Ok(tcp_stream) = TcpStream::connect(("127.0.0.1", localhost_port_shared)).await {
@@ -473,14 +477,10 @@ fn go(tokio_runtime: Arc<tokio::runtime::Runtime>,
                                                             //   global QUIC connection or the local TCP connection fails/is terminated:
                                                             let receive_task = tokio_runtime_clone_2.spawn(async move {
                                                                 // Write everything to our TCP client that we receive via QUIC:
-                                                                println!("writing test: server software writes to local TCP server");
-                                                                tokio::io::copy(&mut "test: server software writes to local TCP server".as_ref(), &mut tcp_write_stream).await.unwrap();
                                                                 tokio::io::copy(&mut quic_receive_stream, &mut tcp_write_stream).await.unwrap();
                                                             });
                                                             let send_task = tokio_runtime_clone_3.spawn(async move {
                                                                 // Write everything to our QUIC server that we receive from our TCP client:
-                                                                println!("writing test: server software writes to QUIC stream");
-                                                                tokio::io::copy(&mut "test: server software writes to QUIC stream".as_ref(), &mut quic_send_stream).await.unwrap();
                                                                 tokio::io::copy(&mut tcp_read_stream, &mut quic_send_stream).await.unwrap();
                                                             });
                                                             *status_labels[i].write().unwrap() = format!("Connected");
