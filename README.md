@@ -16,4 +16,4 @@ In contrast to other proprietary software serving a similar purpose, this tool..
 # Disadvantages
 * does **not** set up a full-fledged VPN; only TCP connections to one peer are tunneled and only for one specific port
 * requires server and clients to share IP addresses in advance as well as a connection ID from 0 to 9
-* **As of now, requires the system time of the peer to be synchronous and it also will not work when using IPv4 and one peer is behind a NAT which employs PAT (Port Address Translation). I plan to get rid of these requirements in a future update, of the latter one at least partially!**
+* **As of now, requires the system time of the peers to be synchronous and it also will not work when using IPv4 and one peer is behind a NAT which employs PAT (Port Address Translation). I plan to get rid of these requirements in a future update, of the latter one at least partially!**
